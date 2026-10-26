@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+  - packages/adapters/*
+  - packages/gateways/*
+
+# esbuild ships prebuilt platform binaries; its postinstall is not needed.
+allowBuilds:
+  esbuild: false

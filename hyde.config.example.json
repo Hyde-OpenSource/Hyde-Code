@@ -1,0 +1,16 @@
+{
+  "dataDir": ".hyde",
+  "port": 7420,
+  "agent": { "name": "claude-1" },
+  "maxConcurrentRuns": 1,
+  "quotaSoftCeiling": 0.8,
+  "projects": [
+    {
+      "id": "demo",
+      "name": "Demo repo",
+      "path": "/absolute/path/to/your/repo",
+      "baseBranch": "staging",
+      "checks": ["npm test"]
+    }
+  ]
+}
