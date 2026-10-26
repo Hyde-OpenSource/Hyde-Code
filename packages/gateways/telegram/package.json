@@ -1,0 +1,8 @@
+{
+  "name": "@hyde/gateway-telegram",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@hyde/core": "workspace:*", "grammy": "1.46.0" }
+}
