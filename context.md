@@ -49,10 +49,12 @@
 | Environment | Branch | URL | Set up properly? |
 |---|---|---|---|
 | Local | feature branches | 127.0.0.1:7420 (hub API) | yes |
-| Staging | `staging` | none | local only, no remote yet |
-| Production | `main` | none | local only, no remote yet |
+| Staging | `staging` | origin/staging | yes: tracked, in sync, branch protection on |
+| Production | `main` | origin/main (default branch) | yes: tracked, in sync, branch protection on |
 
-`main` and `staging` were created on 2026-10-27 from an empty root commit (`4ebbcf3`). **No git remote yet**; the owner will provide URLs later.
+`main` and `staging` were created on 2026-10-27 from an empty root commit (`4ebbcf3`).
+- **Remote:** `origin` = https://github.com/Hyde-OpenSource/Hyde-Code (**public**). Pushed 2026-10-27.
+- **Branch protection** (main, staging): PR required (0 approvals), applies to admins, no force-push, no deletion, no required status checks yet (no CI).
 
 ## 7. Environment variables (names only, never values)
 | Name | Used for | Where set |
@@ -73,6 +75,7 @@
 - Tests sit next to the code (`*.test.ts`) and use temp git repos rather than mocks for git behaviour.
 
 ## 9. Known issues / risks
+- The devflow skills (`~/.claude/skills/*` are symlinks into the `Thenn-Labs/devflow-skills` clone at `/mnt/NewVolume/E/PROJECTS 2/SKILL`) have harness mode on branch `feature/harness-mode`. The symlinks follow whatever branch that clone has checked out.
 - `gh pr create` is untested against a real GitHub repo (no remote yet). The push path is tested against a local bare remote.
 - Agent allow rules are per command prefix; compound shell commands (`a && b`) are denied under `--permission-prompts none`. That's safe, and agents retry with separate commands.
 - Progress notes (`report_progress`) are sent immediately, not batched into digests.
@@ -83,6 +86,5 @@
 - **T-n / Q-n / A-n / R-n:** task, question, approval and incident ids.
 
 ## 11. Open questions for the user
-- GitHub remote URL for this repo, and a test repo for the Phase 0 gate demo (owner: "I'll give URLs later").
+- A separate GitHub test repo for the Phase 0 gate demo (agent PRs), or use Hyde-Code itself?
 - Telegram bot token and the owner's Telegram user id (or use `/pair`).
-- Should the devflow skills themselves (`~/.claude/skills`, `Thenn-Labs/devflow-skills`) get the plan's "harness mode" changes (skip Step 1 when `DEVFLOW_HARNESS=1`; use `ask_question` instead of `AskUserQuestion`)?

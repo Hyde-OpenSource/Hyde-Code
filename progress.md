@@ -18,6 +18,15 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-10-27: GitHub remote, branch protection, devflow harness mode
+- **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
+- **Branch:** feature/phase0-core
+- **What:** Added origin https://github.com/Hyde-OpenSource/Hyde-Code (public) and pushed main, staging and feature/phase0-core. Turned on branch protection for main and staging (PR required, applies to admins, no force-push or deletion). In the devflow-skills clone, added a "Harness mode" section (`DEVFLOW_HARNESS=1`: skip the session question, ask through `ask_question`, harness is the single writer of shared files, no pushes) on branch feature/harness-mode (dce05d0) and pushed that branch to Thenn-Labs/devflow-skills.
+- **Why:** Owner gave the repo URL and approved the push, the protection and the skills change (plan section "Small changes to make in devflow-skills for harness mode").
+- **Files:** context.md, progress.md; in devflow-skills: skills/devflow-setup/SKILL.md, skills/devflow-messages/SKILL.md, skills/devflow-test/SKILL.md
+- **Verified:** `git branch -vv` shows all three branches tracking origin and in sync. The GitHub API protection response for both branches showed enforce_admins on, force-push and deletion off, 0 required approvals. Scanned all commits for secrets before pushing; none found.
+- **Open / follow-ups:** No PR opened or merged yet. A test repo for the gate demo and a Telegram bot token are still needed.
+
 ### 2026-10-27: Phase 0 core: hub, Claude Code adapter, worktrees, MCP tools, Telegram
 - **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
 - **Branch:** feature/phase0-core
