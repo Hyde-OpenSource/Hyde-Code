@@ -1,17 +1,32 @@
 #!/usr/bin/env -S node --import tsx
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { loadConfig, persistedSecret } from './config.ts';
+import { runSetup } from './setup.ts';
 
-// Local front door: `pnpm hyde new "Add a footer" #demo`, `pnpm hyde status`, ...
-// Each argument list becomes the same slash command the Telegram bot accepts.
+// Local front door: `pnpm hyde new "Add a footer" #demo`, `pnpm hyde status`, `pnpm hyde setup`,
+// `pnpm hyde dashboard`. Other arguments become the same slash command the chat bots accept.
 const [name, ...rest] = process.argv.slice(2);
 if (!name) {
-  console.log('usage: hyde <new|status|projects|stop|answer|approve|deny|help> [args]');
+  console.log('usage: hyde <setup|dashboard|new|client|status|agents|usage|logs|stop|retry|answer|approve|deny|merge|promote|projects|help> [args]');
   process.exit(1);
 }
+const cwd = process.env.INIT_CWD ?? process.cwd();
+
+if (name === 'setup') {
+  await runSetup(resolve(cwd, process.env.HYDE_CONFIG ?? 'hyde.config.json'), resolve(cwd, '.env'));
+  process.exit(0);
+}
+
 const config = loadConfig();
 const token = persistedSecret(join(config.dataDir, 'owner-token'));
-const res = await fetch(`http://127.0.0.1:${config.port}/api/commands`, {
+const base = `http://127.0.0.1:${config.port}`;
+
+if (name === 'dashboard') {
+  console.log(`Open this link once on this machine (it sets a login cookie):\n${base}/login?token=${token}`);
+  process.exit(0);
+}
+
+const res = await fetch(`${base}/api/commands`, {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
   body: JSON.stringify({ text: `/${name} ${rest.join(' ')}`.trim() }),

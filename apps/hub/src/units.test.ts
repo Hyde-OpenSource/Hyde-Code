@@ -193,3 +193,42 @@ describe('router', () => {
     expect(route({ task, mode: 'start', project: { ...project, agents: ['nobody'] }, state, pool, config, now: 0 })).toMatchObject({ none: expect.any(String) });
   });
 });
+
+describe('setup', async () => {
+  const { buildConfig, upsertEnv } = await import('./setup.ts');
+  const detected = [
+    { id: 'claude-code', label: 'Claude Code', kind: 'agent' as const, installed: true, signedIn: true, suggest: { adapter: 'claude-code', name: 'claude-1', roles: ['plan', 'implement'] } },
+    { id: 'gemini', label: 'Gemini', kind: 'agent' as const, installed: true, signedIn: true, suggest: { adapter: 'acp', name: 'gemini-1', command: ['gemini', '--experimental-acp'], vendor: 'google', roles: ['implement'] } },
+  ];
+
+  it('builds a valid config from only what the owner picked', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hyde-setup-'));
+    mkdirSync(join(dir, '.git'));
+    const raw = buildConfig(detected, {
+      agents: [{ id: 'gemini' }],
+      project: { id: 'demo', path: dir, baseBranch: 'main', checks: ['npm test'] },
+      planner: false,
+      review: false,
+      browser: false,
+      policy: true,
+      gateways: { telegram: true, slack: false, discord: false, whatsapp: false },
+      quietHours: { start: '23:00', end: '08:00' },
+    });
+    expect(raw.agents).toEqual([{ name: 'gemini-1', adapter: 'acp', roles: ['implement'], command: ['gemini', '--experimental-acp'], vendor: 'google' }]);
+    const parsed = parseConfig(raw, join(dir, 'hyde.config.json'), {});
+    expect(parsed.agents[0]!.vendor).toBe('google');
+    expect(parsed.notifications.quietHours).toEqual({ start: '23:00', end: '08:00' });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('keeps other projects and settings when run again', () => {
+    const raw = buildConfig(detected, { agents: [{ id: 'claude-code', model: 'opus' }], project: { id: 'b', path: '/b', baseBranch: 'staging', checks: [] }, planner: true, review: false, browser: false, policy: true, gateways: { telegram: false, slack: false, discord: false, whatsapp: false } }, { port: 9999, projects: [{ id: 'a', path: '/a' }] });
+    expect(raw.port).toBe(9999);
+    expect(raw.projects!.map((p) => p.id)).toEqual(['a', 'b']);
+    expect(raw.agents![0]!.model).toBe('opus');
+  });
+
+  it('upserts .env values without touching other lines', () => {
+    expect(upsertEnv('A=1\nTELEGRAM_BOT_TOKEN=old\n', { TELEGRAM_BOT_TOKEN: 'new', SLACK_BOT_TOKEN: 'x', EMPTY: '' })).toBe('A=1\nTELEGRAM_BOT_TOKEN=new\nSLACK_BOT_TOKEN=x\n');
+  });
+});

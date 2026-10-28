@@ -18,6 +18,15 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-10-29: Roadmap phases 1-4, dashboard and setup wizard
+- **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
+- **Branch:** feature/roadmap-phases-1-4
+- **What:** Codex, OpenCode, ACP and command adapters; agent pool and router; quota scheduling; planner, cross-vendor review, browser verify, merge queue, /promote; Slack, Discord and WhatsApp intake; notifier (digests, quiet hours); schedules; worker nodes; policy hook; lessons; metrics and audit; plugins; container wrapper; React dashboard (Floor, Inbox, Board, Task, Usage, Office, Audit, Settings); `pnpm hyde setup` wizard (nothing compulsory).
+- **Why:** Owner asked to build all of docs/plan.md Phases 0-4 tonight, with every tool optional and picked by the user.
+- **Files:** apps/hub/**, apps/node/**, apps/web/**, packages/**
+- **Verified:** 120 tests pass and typecheck is clean. Real runs: Claude planner returned structured output with questions; Codex planned and wrote docs/GLOSSARY.md; Claude HTTP PreToolUse hook honoured a deny; dashboard loaded live in Chrome.
+- **Open / follow-ups:** BUG: Codex's sandbox could not write the worktree's git metadata (.git/worktrees/T-2/index.lock read-only), so Codex can't commit yet; writable_roots override needs fixing. Planner ran twice on Codex (first output unparsed). Telegram/Slack/Discord/WhatsApp untested live (no tokens). No PRs opened yet. Claude 5-hour quota hit 99% during testing.
+
 ### 2026-10-27: GitHub remote, branch protection, devflow harness mode
 - **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
 - **Branch:** feature/phase0-core

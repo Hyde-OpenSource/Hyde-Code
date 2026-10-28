@@ -1286,8 +1286,10 @@ export class Orchestrator {
       const why = t.blockedBy ? ` (${t.blockedBy.kind} ${t.blockedBy.id})` : '';
       lines.push(`${t.id} [${t.status}${why}] ${t.title}${doing}${t.prUrl ? `\n   PR: ${t.prUrl}` : ''}`);
     }
-    for (const q of [...this.state.questions.values()].filter((q) => q.status === 'open')) lines.push(`${q.id} (${q.taskId}) waiting for you: ${q.text}`);
-    for (const a of [...this.state.approvals.values()].filter((a) => a.status === 'open')) lines.push(`${a.id} (${a.taskId}) waiting for you: ${a.summary}`);
+    // Questions and approvals of finished or cancelled tasks no longer need anyone.
+    const live = (taskId: string) => !TERMINAL_STATUSES.includes(this.state.tasks.get(taskId)?.status ?? 'done');
+    for (const q of [...this.state.questions.values()].filter((q) => q.status === 'open' && live(q.taskId))) lines.push(`${q.id} (${q.taskId}) waiting for you: ${q.text}`);
+    for (const a of [...this.state.approvals.values()].filter((a) => a.status === 'open' && live(a.taskId))) lines.push(`${a.id} (${a.taskId}) waiting for you: ${a.summary}`);
     for (const l of [...this.state.lessons.values()].filter((l) => l.status === 'proposed')) lines.push(`${l.id} lesson proposed: ${l.text}`);
     const quota = this.usageText();
     if (quota !== 'No quota data yet.') lines.push(quota);

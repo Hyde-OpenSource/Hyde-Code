@@ -3,8 +3,12 @@
     "target": "ES2024",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2024"],
-    "types": ["node"],
+    "lib": [
+      "ES2024"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
@@ -13,5 +17,12 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["apps/*/src", "packages/**/src", "vitest.config.ts"]
+  "include": [
+    "apps/*/src",
+    "packages/**/src",
+    "vitest.config.ts"
+  ],
+  "exclude": [
+    "apps/web"
+  ]
 }
