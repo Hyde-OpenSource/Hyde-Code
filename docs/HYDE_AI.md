@@ -78,28 +78,40 @@ waits for your approval when a plan has more than `planner.approvalOver` subtask
 
 ## 3. Contract between the two (keep it stable)
 
-Hyde AI uses only these Hyde Code hub endpoints (`apps/hub/src/http.ts`):
+The hub's client API is specified in `docs/api.md` (from the `feature/hyde-ai-api` branch,
+**apiVersion 1**). The desktop app (`apps/desktop/crates/hyde-ai/src/hydecode.rs`) uses it like this:
 
-| Call | Auth | Used for |
+| Step | API v1 hub | Older hub (fallback) |
 |---|---|---|
-| `GET /api/health` | none | Is the hub up |
-| `GET /api/state` | `Bearer <owner-token>` | `projects[{id,name}]`, `agents[{name,adapter,model,roles,health}]`, `tasks[{id,projectId,title,status,agent,prUrl,blockedBy}]`, `questions[{id,taskId,text,options,blocking,status}]`, `approvals[{id,taskId,kind,summary,status}]` |
-| `POST /api/commands {"text"}` | same | `/new`, `/answer`, `/approve`, `/deny`, `/merge`, `/stop`, `/retry`; reply `{"text"}` (Hyde AI reads `T-<n>` from it) |
-| `GET /login?token=&project=` | token | Opens the office for the user |
-| `hyde hub start` (CLI) | — | Starts the hub |
+| Find the hub | `$HYDE_HOME/hub.json` (`url`, `dataDir`, `apiVersion`), trusted only while `pid` is alive | `$HYDE_HOME/config.json` (`port`, `dataDir`) |
+| Token | `<dataDir>/clients/hyde-ai.token` (narrow: tasks, answers, decisions, read) | `<dataDir>/owner-token` |
+| Is it up | `GET /api/health` → `apiVersion` | same (no `apiVersion` = 0) |
+| New task | `POST /api/tasks {text, project, agent?, requestId}` → `{id, status, projectId}`; errors `{error, code}` | `/new … #project @agent` via `POST /api/commands` |
+| Answer / decide | `POST /api/questions/:id/answer {text}`, `POST /api/approvals/:id {decision}` | `/answer`, `/approve`, `/deny` commands |
+| Merge / stop / retry | `/merge`, `/stop`, `/retry` via `POST /api/commands` | same |
+| What needs me | `GET /api/summary` (`needsYou` questions, approvals, merges; agent quota) + `GET /api/state` for the task list | `GET /api/state` only |
+| Live updates | SSE `GET /api/events` → desktop notifications (`notify-send`) for `question.asked`, `approval.requested`, `task.pr_opened`, `incident.raised`, task done; resumes with `?after=<seq>` | none |
+| Open the office | `GET /login?token=<owner token>` (owner token only) | same |
+| Start the hub | `hyde hub start` | same |
 
-The desktop app's own API only lets the UI send `/approve /deny /merge /stop /retry /answer` to the
-hub; config changes, `/promote` and project trust stay inside Hyde Code.
+The desktop app's own API lets its UI send only `/approve /deny /merge /stop /retry /answer`
+(plus new tasks). Config, `/promote`, lessons and project trust stay with the owner in Hyde Code;
+the client token can't do them either (the hub answers 401/403).
 
-Tests that pin this contract: `pnpm desktop:test` (`hydecode::tests`, golden phrases in
-`agent::tests`). A mock hub for manual checks lives in the session notes; never test against
-the real hub with real tasks unless you mean to spend agent quota.
+Tasks the desktop app creates are recorded with actor `client:hyde-ai` and source `hyde-ai`, and
+always go through the planner's clarify step when an agent has the `plan` role.
+
+Verified on 2026-10-30 against the real v1 hub in a scratch `HYDE_HOME`, with a `command` agent
+that runs `true` (no AI CLI, no quota). Covered: task creation by voice with a project name and
+agent alias, project given by display name, unknown project error, typed approve and answer
+(404 path), the summary, the SSE replay, and a 401 for the client token on an owner-only route.
+Unit tests: `pnpm desktop:test` (`hydecode::tests`, golden phrases in `agent::tests`).
 
 ## 4. Roadmap
 
 ### For Hyde Code (`apps/hub`)
 
-**P0: make the integration robust**
+**P0: make the integration robust** — ✅ done on `feature/hyde-ai-api` (items 1–11), and the desktop app uses them
 1. `POST /api/tasks {project, text, agent?, source}` → `{id, status}`. Today Hyde AI parses
    `T-<n>` out of a reply string.
 2. `GET /api/health` → `{ok, version, apiVersion}`, so clients can warn on mismatch.
@@ -124,9 +136,8 @@ the real hub with real tasks unless you mean to spend agent quota.
 12. ~~`hyde ai` subcommand that launches `hyde-ai`~~ — done when the projects were merged.
 
 ### For the desktop app (`apps/desktop`)
-- Desktop notifications for new questions and approvals (after P1-8).
-- Switch to `/api/tasks` and the client token once Hyde Code ships them; keep the current
-  path as a fallback.
+- ~~Desktop notifications for new questions and approvals~~ — done (SSE `/api/events`, toggle in the Hyde Code tab).
+- ~~Switch to `/api/tasks` and the client token~~ — done, with the chat-command path kept as a fallback.
 - Push-to-talk global shortcut, and offline speech-to-text (Vosk/whisper.cpp) instead of the
   browser's speech API.
 - OmniRoute → OpenCode wiring: write OmniRoute as a provider into `~/.config/opencode/opencode.json`.

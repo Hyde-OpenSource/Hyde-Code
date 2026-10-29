@@ -1,22 +1,21 @@
 //! Bridge to Hyde Code, the coding-agent hub (Claude Code, Codex, OpenCode).
 //!
-//! Hyde AI never runs coding agents itself: it turns plain words into Hyde Code hub
-//! commands (`/new`, `/approve`, `/merge`, …) and shows the hub's state. Everything the
-//! hub does (worktrees, reviews, approvals, PRs, policy) stays in Hyde Code.
+//! The desktop app never runs coding agents itself: it turns plain words into hub requests
+//! and shows the hub's state. Worktrees, reviews, approvals, PRs and policy stay in the hub.
 //!
-//! Contract used (Hyde Code `apps/hub/src/http.ts`):
-//! - `GET  /api/health`                       no auth
-//! - `GET  /api/state`                        `Authorization: Bearer <owner-token>`
-//! - `POST /api/commands {"text": "/new …"}`  same auth, returns `{"text": reply}`
-//! - `GET  /login?token=…&project=…`          opens the web office with a cookie
+//! Contract: `docs/api.md` (hub client API, `apiVersion` 1). With an API v1 hub this uses
+//! the client token and the typed endpoints (`POST /api/tasks`, `/api/questions/:id/answer`,
+//! `/api/approvals/:id`, `GET /api/summary`, SSE `/api/events`). Older hubs fall back to the
+//! owner token, `GET /api/state` and chat commands on `POST /api/commands`.
 //!
-//! Discovery: `$HYDE_HOME` (default `~/.hyde`) holds `config.json` (`port`, `dataDir`) and
-//! `<dataDir>/owner-token`.
+//! Discovery: `$HYDE_HOME/hub.json` (written by a running hub), else `$HYDE_HOME/config.json`
+//! (`port`, `dataDir`). Tokens: `<dataDir>/clients/hyde-ai.token`, else `<dataDir>/owner-token`.
 
 use crate::config::home_dir;
 use crate::tools;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -27,7 +26,14 @@ pub const DEFAULT_PORT: u16 = 7420;
 pub struct Hub {
     pub home: PathBuf,
     pub port: u16,
+    /// Token for API calls: the narrow `hyde-ai` client token when the hub made one, else the owner token.
     pub token: Option<String>,
+    /// True when `token` is the client token.
+    pub client_token: bool,
+    /// Owner token, only for opening the office (`/login` is owner-only).
+    pub owner_token: Option<String>,
+    /// `apiVersion` from `hub.json`, when the running hub wrote one.
+    pub api_version: Option<u64>,
     /// Hyde Code's `hyde` CLI, used to start the hub.
     pub cli: Option<PathBuf>,
 }
@@ -45,31 +51,61 @@ pub fn hyde_home() -> PathBuf {
         .unwrap_or_else(|| home_dir().join(".hyde"))
 }
 
-/// Finds the hub's port, owner token and CLI. Never fails; missing parts are `None`.
-pub fn discover() -> Hub {
-    let home = hyde_home();
-    let config: Value = std::fs::read_to_string(home.join("config.json"))
+fn read_json(path: PathBuf) -> Value {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or(Value::Null);
-    let port = config
-        .get("port")
+        .unwrap_or(Value::Null)
+}
+
+fn read_token(path: PathBuf) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+}
+
+fn pid_alive(pid: u64) -> bool {
+    pid > 0 && PathBuf::from(format!("/proc/{pid}")).exists()
+}
+
+/// Port from a `http://127.0.0.1:<port>` url.
+fn port_of(url: &str) -> Option<u16> {
+    url.rsplit(':').next()?.trim_end_matches('/').parse().ok()
+}
+
+/// Finds the hub's port, tokens and CLI. Never fails; missing parts are `None`.
+pub fn discover() -> Hub {
+    let home = hyde_home();
+    let config = read_json(home.join("config.json"));
+    let info = read_json(home.join("hub.json"));
+    // hub.json is only trusted while its process is alive (a crash can leave it behind).
+    let live = info
+        .get("pid")
         .and_then(Value::as_u64)
-        .and_then(|p| u16::try_from(p).ok())
+        .is_some_and(pid_alive);
+    let port = live
+        .then(|| info.get("url").and_then(Value::as_str).and_then(port_of))
+        .flatten()
+        .or_else(|| {
+            config
+                .get("port")
+                .and_then(Value::as_u64)
+                .and_then(|p| u16::try_from(p).ok())
+        })
         .unwrap_or(DEFAULT_PORT);
-    let data_dir = config
-        .get("dataDir")
-        .and_then(Value::as_str)
+    let data_dir = live
+        .then(|| info.get("dataDir").and_then(Value::as_str))
+        .flatten()
+        .or_else(|| config.get("dataDir").and_then(Value::as_str))
         .unwrap_or("data");
     let data_dir = if PathBuf::from(data_dir).is_absolute() {
         PathBuf::from(data_dir)
     } else {
         home.join(data_dir)
     };
-    let token = std::fs::read_to_string(data_dir.join("owner-token"))
-        .ok()
-        .map(|t| t.trim().to_owned())
-        .filter(|t| !t.is_empty());
+    let owner_token = read_token(data_dir.join("owner-token"));
+    let client = read_token(data_dir.join("clients").join("hyde-ai.token"));
     // `hyde` on PATH is Hyde Code's launcher (a bash script); make sure it isn't something else.
     let cli = tools::which("hyde").filter(|path| {
         std::fs::read(path)
@@ -81,7 +117,12 @@ pub fn discover() -> Hub {
     Hub {
         home,
         port,
-        token,
+        client_token: client.is_some(),
+        token: client.or_else(|| owner_token.clone()),
+        owner_token,
+        api_version: live
+            .then(|| info.get("apiVersion").and_then(Value::as_u64))
+            .flatten(),
         cli,
     }
 }
@@ -90,12 +131,31 @@ fn agent(timeout: Duration) -> ureq::Agent {
     ureq::AgentBuilder::new().timeout(timeout).build()
 }
 
+/// `GET /api/health`: `None` when the hub is down, else its `apiVersion` (0 for older hubs).
+pub fn health(hub: &Hub) -> Option<u64> {
+    if !tools::port_open(hub.port) {
+        return None;
+    }
+    let value: Value = agent(Duration::from_millis(1500))
+        .get(&format!("{}/api/health", hub.url()))
+        .call()
+        .ok()?
+        .into_json()
+        .ok()?;
+    Some(value.get("apiVersion").and_then(Value::as_u64).unwrap_or(0))
+}
+
 pub fn is_up(hub: &Hub) -> bool {
-    tools::port_open(hub.port)
-        && agent(Duration::from_millis(1500))
-            .get(&format!("{}/api/health", hub.url()))
-            .call()
-            .is_ok()
+    health(hub).is_some()
+}
+
+/// The hub speaks the typed client API (v1) and we hold a token for it.
+pub fn typed(hub: &Hub) -> bool {
+    hub.token.is_some()
+        && hub
+            .api_version
+            .or_else(|| health(hub))
+            .is_some_and(|v| v >= 1)
 }
 
 fn auth(hub: &Hub) -> Result<String, String> {
@@ -104,51 +164,188 @@ fn auth(hub: &Hub) -> Result<String, String> {
         .map(|t| format!("Bearer {t}"))
         .ok_or_else(|| {
             format!(
-                "Hyde Code's owner token wasn't found in {}. Run `hyde` once to set it up.",
+                "No Hyde Code token was found in {}. Run `hyde` once to set it up.",
                 hub.home.display()
             )
         })
 }
 
-fn hub_error(error: ureq::Error) -> String {
-    match error {
-        ureq::Error::Status(code, response) => {
-            let body = response.into_string().unwrap_or_default();
-            let detail = serde_json::from_str::<Value>(&body)
-                .ok()
-                .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_owned))
-                .unwrap_or(body);
-            format!("Hyde Code hub returned {code}: {detail}")
-        }
-        ureq::Error::Transport(t) => format!("couldn't reach the Hyde Code hub: {t}"),
+/// A hub error: the people-facing text plus the machine `code` from API v1 (`project`, `duplicate`, …).
+#[derive(Debug)]
+pub struct HubError {
+    pub message: String,
+    pub code: Option<String>,
+}
+
+impl From<HubError> for String {
+    fn from(error: HubError) -> Self {
+        error.message
     }
 }
 
-pub fn state(hub: &Hub) -> Result<Value, String> {
+fn hub_error(error: ureq::Error) -> HubError {
+    match error {
+        ureq::Error::Status(status, response) => {
+            let body = response.into_string().unwrap_or_default();
+            let value = serde_json::from_str::<Value>(&body).ok();
+            let detail = value
+                .as_ref()
+                .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_owned))
+                .unwrap_or(body);
+            let code = value
+                .as_ref()
+                .and_then(|v| v.get("code").and_then(Value::as_str).map(str::to_owned));
+            let message = match status {
+                401 | 403 => format!("Hyde Code didn't allow that ({status}): {detail}"),
+                _ => detail,
+            };
+            HubError { message, code }
+        }
+        ureq::Error::Transport(t) => HubError {
+            message: format!("couldn't reach the Hyde Code hub: {t}"),
+            code: None,
+        },
+    }
+}
+
+fn get(hub: &Hub, path: &str) -> Result<Value, HubError> {
+    let auth = auth(hub).map_err(|message| HubError {
+        message,
+        code: None,
+    })?;
     agent(Duration::from_secs(8))
-        .get(&format!("{}/api/state", hub.url()))
-        .set("Authorization", &auth(hub)?)
+        .get(&format!("{}{path}", hub.url()))
+        .set("Authorization", &auth)
         .call()
         .map_err(hub_error)?
         .into_json()
-        .map_err(|e| format!("invalid hub state: {e}"))
+        .map_err(|e| HubError {
+            message: format!("invalid hub reply: {e}"),
+            code: None,
+        })
 }
 
-/// Sends a hub command such as `/new add a footer #site` and returns the hub's reply text.
-pub fn command(hub: &Hub, text: &str) -> Result<String, String> {
-    let reply: Value = agent(Duration::from_secs(30))
-        .post(&format!("{}/api/commands", hub.url()))
-        .set("Authorization", &auth(hub)?)
-        .send_json(json!({ "text": text }))
+fn post(hub: &Hub, path: &str, body: Value) -> Result<Value, HubError> {
+    let auth = auth(hub).map_err(|message| HubError {
+        message,
+        code: None,
+    })?;
+    agent(Duration::from_secs(30))
+        .post(&format!("{}{path}", hub.url()))
+        .set("Authorization", &auth)
+        .send_json(body)
         .map_err(hub_error)?
         .into_json()
-        .map_err(|e| format!("invalid hub reply: {e}"))?;
-    Ok(reply
+        .map_err(|e| HubError {
+            message: format!("invalid hub reply: {e}"),
+            code: None,
+        })
+}
+
+fn reply_text(value: &Value) -> String {
+    value
         .get("text")
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim()
-        .to_owned())
+        .to_owned()
+}
+
+pub fn state(hub: &Hub) -> Result<Value, String> {
+    get(hub, "/api/state").map_err(String::from)
+}
+
+/// API v1 only: `GET /api/summary` (counts, what needs the owner, agents with quota).
+pub fn summary_v1(hub: &Hub) -> Result<Value, String> {
+    get(hub, "/api/summary").map_err(String::from)
+}
+
+/// Sends a chat command such as `/merge T-4` and returns the hub's reply text.
+pub fn command(hub: &Hub, text: &str) -> Result<String, String> {
+    post(hub, "/api/commands", json!({ "text": text }))
+        .map(|v| reply_text(&v))
+        .map_err(String::from)
+}
+
+#[derive(Debug)]
+pub struct CreatedTask {
+    pub id: String,
+    pub status: String,
+    pub project_id: String,
+    pub text: String,
+}
+
+/// API v1: `POST /api/tasks`. `request_id` makes retries safe (a repeat returns `duplicate`).
+pub fn create_task(
+    hub: &Hub,
+    text: &str,
+    project: Option<&str>,
+    agent: Option<&str>,
+    request_id: &str,
+) -> Result<CreatedTask, HubError> {
+    let mut body = json!({ "text": text, "requestId": request_id });
+    if let Some(project) = project.filter(|p| !p.is_empty()) {
+        body["project"] = json!(project);
+    }
+    if let Some(agent) = agent.filter(|a| !a.is_empty()) {
+        body["agent"] = json!(agent);
+    }
+    let value = post(hub, "/api/tasks", body)?;
+    let field = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    Ok(CreatedTask {
+        id: field("id"),
+        status: field("status"),
+        project_id: field("projectId"),
+        text: reply_text(&value),
+    })
+}
+
+/// API v1: `POST /api/questions/:id/answer`.
+pub fn answer(hub: &Hub, question: &str, text: &str) -> Result<String, String> {
+    post(
+        hub,
+        &format!("/api/questions/{question}/answer"),
+        json!({ "text": text }),
+    )
+    .map(|v| reply_text(&v))
+    .map_err(String::from)
+}
+
+/// API v1: `POST /api/approvals/:id`.
+pub fn decide(hub: &Hub, approval: &str, approve: bool) -> Result<String, String> {
+    post(
+        hub,
+        &format!("/api/approvals/{approval}"),
+        json!({ "decision": if approve { "approve" } else { "deny" } }),
+    )
+    .map(|v| reply_text(&v))
+    .map_err(String::from)
+}
+
+/// Runs an owner decision. On a v1 hub, answers and approvals use the typed endpoints.
+pub fn run_command(hub: &Hub, text: &str) -> Result<String, String> {
+    if typed(hub) {
+        let mut parts = text.splitn(3, ' ');
+        let (verb, target, rest) = (
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or("").trim(),
+        );
+        let is_ref = |prefix: char| target.starts_with(prefix) && target[1..].starts_with('-');
+        match verb {
+            "/answer" if is_ref('Q') && !rest.is_empty() => return answer(hub, target, rest),
+            "/approve" if is_ref('A') => return decide(hub, target, true),
+            "/deny" if is_ref('A') => return decide(hub, target, false),
+            _ => {}
+        }
+    }
+    command(hub, text)
 }
 
 /// Starts the hub in the background through Hyde Code's own CLI and waits until it answers.
@@ -156,9 +353,10 @@ pub fn start(hub: &Hub) -> Result<String, String> {
     if is_up(hub) {
         return Ok("Hyde Code hub is already running".into());
     }
-    let cli = hub.cli.clone().ok_or(
-        "Hyde Code isn't installed on PATH. In the Hyde Code folder run `pnpm install-cli`.",
-    )?;
+    let cli = hub
+        .cli
+        .clone()
+        .ok_or("Hyde Code isn't installed on PATH. In the repo run `pnpm install-cli`.")?;
     Command::new(cli)
         .args(["hub", "start"])
         .stdin(Stdio::null())
@@ -180,17 +378,17 @@ pub fn start(hub: &Hub) -> Result<String, String> {
     ))
 }
 
-pub fn ensure_up(hub: &Hub) -> Result<(), String> {
-    if is_up(hub) {
-        Ok(())
-    } else {
-        start(hub).map(|_| ())
+/// Makes sure the hub runs and returns a fresh discovery (a starting hub writes hub.json and the client token).
+pub fn ensure_up(hub: &Hub) -> Result<Hub, String> {
+    if !is_up(hub) {
+        start(hub)?;
     }
+    Ok(discover())
 }
 
 pub fn office_url(hub: &Hub, project: Option<&str>) -> Result<String, String> {
     let token = hub
-        .token
+        .owner_token
         .as_ref()
         .ok_or("Hyde Code's owner token wasn't found")?;
     let mut url = format!("{}/login?token={token}", hub.url());
@@ -198,6 +396,159 @@ pub fn office_url(hub: &Hub, project: Option<&str>) -> Result<String, String> {
         url.push_str(&format!("&project={}", crate::agent::url_encode(project)));
     }
     Ok(url)
+}
+
+// ---------------------------------------------------------------- live events → desktop notifications
+
+/// One notification-worthy hub event, from SSE `/api/events` (API v1).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub title: String,
+    pub body: String,
+}
+
+/// Turns an event record into a notification, or `None` for event types we don't announce.
+pub fn notice_for(event: &Value) -> Option<Notice> {
+    let kind = event.get("type")?.as_str()?;
+    let p = event.get("payload").cloned().unwrap_or(Value::Null);
+    let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    let task = s(&p, "taskId");
+    let task = if task.is_empty() {
+        s(event, "taskId")
+    } else {
+        task
+    };
+    let short = |text: String| -> String {
+        let text = text.replace('\n', " ");
+        if text.chars().count() > 180 {
+            format!("{}…", text.chars().take(180).collect::<String>())
+        } else {
+            text
+        }
+    };
+    Some(match kind {
+        "question.asked" => Notice {
+            title: format!("{} asks ({task})", s(&p, "questionId")),
+            body: short(s(&p, "text")),
+        },
+        "approval.requested" => Notice {
+            title: format!("Approval {} needed ({task})", s(&p, "approvalId")),
+            body: short(s(&p, "summary")),
+        },
+        "task.pr_opened" => Notice {
+            title: format!("Pull request ready ({task})"),
+            body: s(&p, "url"),
+        },
+        "incident.raised" => Notice {
+            title: format!(
+                "Problem on {}",
+                if task.is_empty() {
+                    "the hub".into()
+                } else {
+                    task
+                }
+            ),
+            body: short(s(&p, "about")),
+        },
+        "task.status_changed" if s(&p, "to") == "done" => Notice {
+            title: format!("{task} is done"),
+            body: String::new(),
+        },
+        _ => return None,
+    })
+}
+
+/// Parses one SSE frame (lines up to a blank line) into (id, data).
+pub fn parse_frame(lines: &[String]) -> (Option<u64>, Option<String>, Option<String>) {
+    let mut id = None;
+    let mut event = None;
+    let mut data: Vec<&str> = Vec::new();
+    for line in lines {
+        if let Some(v) = line.strip_prefix("id:") {
+            id = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("event:") {
+            event = Some(v.trim().to_owned());
+        } else if let Some(v) = line.strip_prefix("data:") {
+            data.push(v.strip_prefix(' ').unwrap_or(v));
+        }
+    }
+    (id, event, (!data.is_empty()).then(|| data.join("\n")))
+}
+
+/// Follows the hub's event stream forever, calling `notify` for each notice. Reconnects with
+/// `?after=<last seq>` so nothing is missed or repeated; idles while the hub is down or older than v1.
+pub fn watch_events(enabled: impl Fn() -> bool, notify: impl Fn(Notice)) {
+    let mut last: Option<u64> = None;
+    loop {
+        let hub = discover();
+        if !enabled() || !typed(&hub) {
+            std::thread::sleep(Duration::from_secs(15));
+            continue;
+        }
+        let path = match last {
+            Some(seq) => format!("/api/events?after={seq}"),
+            None => "/api/events".into(),
+        };
+        let Ok(auth) = auth(&hub) else {
+            std::thread::sleep(Duration::from_secs(15));
+            continue;
+        };
+        // Pings arrive every 15 s, so a 45 s read timeout means the connection is dead.
+        let response = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(3))
+            .timeout_read(Duration::from_secs(45))
+            .build()
+            .get(&format!("{}{path}", hub.url()))
+            .set("Authorization", &auth)
+            .set("Accept", "text/event-stream")
+            .call();
+        if let Ok(response) = response {
+            let reader = std::io::BufReader::new(response.into_reader());
+            let mut frame: Vec<String> = Vec::new();
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                if !line.is_empty() {
+                    frame.push(line);
+                    continue;
+                }
+                let (id, event, data) = parse_frame(&frame);
+                frame.clear();
+                if let Some(id) = id {
+                    last = Some(id);
+                }
+                if event.as_deref() == Some("ping") || !enabled() {
+                    continue;
+                }
+                if let Some(notice) = data
+                    .and_then(|d| serde_json::from_str::<Value>(&d).ok())
+                    .as_ref()
+                    .and_then(notice_for)
+                {
+                    notify(notice);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_secs(5));
+    }
+}
+
+/// Shows a desktop notification through `notify-send`, if it exists.
+pub fn desktop_notify(notice: &Notice) {
+    if let Some(bin) = tools::which("notify-send") {
+        let _ = Command::new(bin)
+            .args([
+                "-a",
+                "Hyde AI",
+                "-i",
+                "hyde-ai",
+                &format!("Hyde Code · {}", notice.title),
+                &notice.body,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
 }
 
 // ---------------------------------------------------------------- projects
@@ -439,6 +790,56 @@ pub fn summary(hub: &Hub, default_project: &str) -> Value {
         &["id", "taskId", "text", "options", "blocking"]
     ));
     out["approvals"] = json!(open("approvals", &["id", "taskId", "kind", "summary"]));
+    out["merges"] = json!([]);
+    out["api_version"] = json!(0);
+    out["client_token"] = json!(hub.client_token);
+
+    // API v1: the hub's own summary is the source of truth for what needs the owner and for quota.
+    if typed(hub) {
+        if let Ok(v1) = summary_v1(hub) {
+            out["api_version"] = v1.get("apiVersion").cloned().unwrap_or(json!(1));
+            let needs: Vec<Value> = v1
+                .get("needsYou")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let of = |kind: &str| {
+                needs
+                    .iter()
+                    .filter(|n| n.get("kind").and_then(Value::as_str) == Some(kind))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            out["questions"] = json!(of("question"));
+            out["approvals"] = json!(of("approval")
+                .into_iter()
+                .map(|mut a| {
+                    a["kind"] = a.get("approvalKind").cloned().unwrap_or(Value::Null);
+                    a
+                })
+                .collect::<Vec<_>>());
+            out["merges"] = json!(of("merge"));
+            out["counts"] = v1.get("counts").cloned().unwrap_or(Value::Null);
+            out["quota_soft_ceiling"] = v1.get("quotaSoftCeiling").cloned().unwrap_or(Value::Null);
+            let quota: Vec<Value> = v1
+                .get("agents")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(agents) = out["agents"].as_array_mut() {
+                for agent in agents.iter_mut() {
+                    let name = agent.get("name").cloned();
+                    if let Some(q) = quota.iter().find(|q| q.get("name") == name.as_ref()) {
+                        for key in ["usable", "percent", "nearCeiling", "blocked", "resetsAt"] {
+                            if let Some(value) = q.get(key) {
+                                agent[key] = value.clone();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     out
 }
 
@@ -452,11 +853,14 @@ pub fn status_text(summary: &Value) -> String {
             .as_array()
             .map_or(0, |t| t.iter().filter(|x| x["status"] == status).count())
     };
+    let list_len = |key: &str| summary[key].as_array().map_or(0, Vec::len);
+    let needs = list_len("questions") + list_len("approvals") + list_len("merges");
+    let merges = list_len("merges").max(count("awaiting_merge"));
     let mut lines = vec![format!(
         "**Hyde Code** — {} running, {} waiting for you, {} ready for merge.",
         count("running") + count("verifying") + count("reviewing"),
-        count("blocked"),
-        count("awaiting_merge")
+        needs.max(count("blocked")),
+        merges
     )];
     for q in summary["questions"]
         .as_array()
@@ -483,6 +887,27 @@ pub fn status_text(summary: &Value) -> String {
             a["taskId"].as_str().unwrap_or("?"),
             a["summary"].as_str().unwrap_or("")
         ));
+    }
+    for m in summary["merges"].as_array().into_iter().flatten().take(5) {
+        lines.push(format!(
+            "- **{}** is ready to merge: {}",
+            m["taskId"].as_str().unwrap_or("?"),
+            m["taskTitle"].as_str().unwrap_or("")
+        ));
+    }
+    for a in summary["agents"].as_array().into_iter().flatten() {
+        if let Some(blocked) = a["blocked"].as_str() {
+            lines.push(format!(
+                "- ⚠ {} is paused: {blocked}",
+                a["name"].as_str().unwrap_or("an agent")
+            ));
+        } else if a["nearCeiling"] == json!(true) {
+            lines.push(format!(
+                "- ⚠ {} is at {}% of its quota; new runs wait",
+                a["name"].as_str().unwrap_or("an agent"),
+                a["percent"].as_u64().unwrap_or(0)
+            ));
+        }
     }
     for t in summary["tasks"]
         .as_array()
@@ -549,6 +974,42 @@ mod tests {
         assert_eq!(reference("q3").as_deref(), Some("Q-3"));
         assert_eq!(reference("all"), None);
         assert_eq!(reference("x 2"), None);
+    }
+
+    #[test]
+    fn reads_sse_frames_and_notices() {
+        let frame = vec![
+            "id: 813".to_string(),
+            r#"data: {"seq":813,"type":"question.asked","taskId":"T-12","payload":{"questionId":"Q-3","taskId":"T-12","text":"Paginate?"}}"#.to_string(),
+        ];
+        let (id, event, data) = parse_frame(&frame);
+        assert_eq!(id, Some(813));
+        assert_eq!(event, None);
+        let notice = notice_for(&serde_json::from_str(&data.unwrap()).unwrap()).unwrap();
+        assert_eq!(
+            notice,
+            Notice {
+                title: "Q-3 asks (T-12)".into(),
+                body: "Paginate?".into()
+            }
+        );
+        assert_eq!(
+            parse_frame(&["event: ping".to_string(), "data:".to_string()])
+                .1
+                .as_deref(),
+            Some("ping")
+        );
+        let run = json!({"type": "run.event", "payload": {}});
+        assert_eq!(notice_for(&run), None);
+        let done = json!({"type": "task.status_changed", "payload": {"taskId": "T-2", "from": "awaiting_merge", "to": "done"}});
+        assert_eq!(notice_for(&done).unwrap().title, "T-2 is done");
+    }
+
+    #[test]
+    fn reads_ports_from_urls() {
+        assert_eq!(port_of("http://127.0.0.1:7420"), Some(7420));
+        assert_eq!(port_of("http://127.0.0.1:17421/"), Some(17421));
+        assert_eq!(port_of("nope"), None);
     }
 
     #[test]

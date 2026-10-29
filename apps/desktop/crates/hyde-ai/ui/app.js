@@ -613,9 +613,11 @@ function renderCode(data) {
   status.className = `status ${data.running ? 'ok' : ''}`;
   status.replaceChildren(el('span', { class: `dot ${data.running ? 'on' : ''}` }), data.running ? 'Hub running' : 'Hub stopped');
   $('#hub-start').hidden = data.running || !data.has_cli;
+  $('#notify-wrap').hidden = !data.can_notify || !data.running || !data.api_version;
+  $('#notify-toggle').checked = Boolean(data.notify);
   $('#hub-open').disabled = !data.has_token;
 
-  const waiting = (data.questions?.length || 0) + (data.approvals?.length || 0);
+  const waiting = (data.questions?.length || 0) + (data.approvals?.length || 0) + (data.merges?.length || 0);
   const badge = $('#code-badge');
   badge.hidden = !waiting;
   badge.textContent = waiting;
@@ -679,8 +681,21 @@ function fillAgents(agents) {
     return el('div', { class: 'card agent-card' },
       el('div', { class: 'row' }, el('b', {}, a.name), el('span', { class: `status ${ok ? 'ok' : ''}` }, el('span', { class: `dot ${ok ? 'on' : 'warn'}` }), ok ? 'Ready' : 'Check sign-in')),
       el('small', {}, [a.adapter, a.model].filter(Boolean).join(' · ')),
-      a.roles?.length ? el('small', {}, a.roles.join(', ')) : null);
+      a.roles?.length ? el('small', {}, a.roles.join(', ')) : null,
+      ...quotaBar(a));
   }) : [el('div', { class: 'empty' }, 'No agents configured. Run `hyde setup`.')]));
+}
+
+function quotaBar(a) {
+  if (typeof a.percent !== 'number') return [];
+  const level = a.blocked ? 'full' : a.nearCeiling ? 'high' : '';
+  const reset = a.resetsAt ? ` · resets ${new Date(a.resetsAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+  const label = a.blocked ? `Paused: ${a.blocked}` : `${a.percent}% of quota used${a.nearCeiling ? ', new runs wait' : ''}${reset}`;
+  return [
+    el('div', { class: 'quota', role: 'meter', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': a.percent, 'aria-label': `${a.name} quota` },
+      el('i', { class: level, style: `width:${Math.min(100, Math.max(2, a.percent))}%` })),
+    el('small', {}, label),
+  ];
 }
 
 function renderNeeds(data) {
@@ -693,7 +708,7 @@ function renderNeeds(data) {
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAnswer(input.value); });
     const quick = (q.options || []).slice(0, 4).map((o) => el('button', { class: 'chip', type: 'button', onclick: () => submitAnswer(o) }, o));
     items.push(el('div', { class: 'card need' },
-      el('div', { class: 'need-top' }, el('span', { class: 'id' }, q.id), 'question on', el('span', { class: 'id' }, q.taskId), q.blocking ? el('span', { class: 'pill blocked' }, 'blocking') : null),
+      el('div', { class: 'need-top' }, el('span', { class: 'id' }, q.id), 'question on', el('span', { class: 'id' }, q.taskId), q.taskTitle ? `· ${q.taskTitle}` : null, q.blocking ? el('span', { class: 'pill blocked' }, 'blocking') : null),
       el('div', { class: 'need-text', html: markdown(q.text) }),
       quick.length ? el('div', { class: 'need-actions' }, ...quick) : null,
       el('div', { class: 'need-actions' }, input, send)));
@@ -707,6 +722,16 @@ function renderNeeds(data) {
       el('div', { class: 'need-top' }, el('span', { class: 'id' }, a.id), `${(a.kind || 'approval').replace(/[-_]/g, ' ')} for`, el('span', { class: 'id' }, a.taskId)),
       el('div', { class: 'need-text' }, a.summary),
       el('div', { class: 'need-actions' }, deny, approve)));
+  }
+  for (const m of data.merges || []) {
+    const merge = el('button', { class: 'btn primary small', type: 'button' }, 'Merge');
+    merge.addEventListener('click', () => codeCommand(`/merge ${m.taskId}`, merge));
+    items.push(el('div', { class: 'card need' },
+      el('div', { class: 'need-top' }, el('span', { class: 'id' }, m.taskId), 'ready to merge', m.projectId ? `· #${m.projectId}` : null),
+      el('div', { class: 'need-text' }, m.taskTitle || ''),
+      el('div', { class: 'need-actions' },
+        m.prUrl ? el('a', { class: 'btn ghost small', href: m.prUrl, target: '_blank', rel: 'noopener noreferrer' }, icon('pr'), 'Review PR') : null,
+        merge)));
   }
   $('#needs').replaceChildren(...(items.length ? items : [el('div', { class: 'empty' }, 'Nothing is waiting for you.')]));
 }
@@ -750,6 +775,12 @@ async function startHub(button) {
 }
 
 $('#hub-start').addEventListener('click', (e) => startHub(e.currentTarget));
+$('#notify-toggle').addEventListener('change', async (e) => {
+  try {
+    await api('POST', '/api/code/notify', { enabled: e.currentTarget.checked });
+    toast(e.currentTarget.checked ? 'Desktop notifications on' : 'Desktop notifications off');
+  } catch (error) { toast(error.message, 'err'); }
+});
 $('#hub-open').addEventListener('click', (e) => withLoading(e.currentTarget, async () => {
   try { toast((await api('POST', '/api/code/open', { project: $('#assign-project').value || null })).message); }
   catch (error) { toast(error.message, 'err'); }
@@ -789,7 +820,7 @@ $('#assign-text').addEventListener('keydown', (e) => {
   try {
     const data = await loadState();
     replayHistory(data.history);
-    api('GET', '/api/code').then((d) => { code.data = d; const n = (d.questions?.length || 0) + (d.approvals?.length || 0); $('#code-badge').hidden = !n; $('#code-badge').textContent = n; }).catch(() => {});
+    api('GET', '/api/code').then((d) => { code.data = d; const n = (d.questions?.length || 0) + (d.approvals?.length || 0) + (d.merges?.length || 0); $('#code-badge').hidden = !n; $('#code-badge').textContent = n; }).catch(() => {});
   } catch (error) {
     toast(error.message, 'err');
   }

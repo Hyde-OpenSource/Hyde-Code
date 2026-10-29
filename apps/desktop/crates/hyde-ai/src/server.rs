@@ -85,6 +85,22 @@ pub fn serve(shared: Arc<Shared>, port: u16, open: bool) -> Result<(), String> {
         }
     };
     let token: Arc<str> = session_token().into();
+    // Desktop notifications for Hyde Code questions, approvals and PRs (hub API v1 event stream).
+    {
+        let watcher = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            hydecode::watch_events(
+                || {
+                    watcher
+                        .config
+                        .lock()
+                        .map(|c| c.code.notify)
+                        .unwrap_or(false)
+                },
+                |notice| hydecode::desktop_notify(&notice),
+            )
+        });
+    }
     println!("Hyde AI is running at {}  (Ctrl+C to stop)", url(port));
     if open {
         open_ui(port);
@@ -205,6 +221,11 @@ struct CommandBody {
 struct ConfirmBody {
     pending_id: u64,
     approve: bool,
+}
+
+#[derive(Deserialize)]
+struct NotifyBody {
+    enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -354,12 +375,15 @@ fn api(request: &mut Request, shared: &Shared, method: &Method, path: &str) -> A
             }
         }
         (Method::Get, "/api/code") => {
-            let default = shared
+            let (default, notify) = shared
                 .config
                 .lock()
-                .map(|c| c.code.default_project.clone())
+                .map(|c| (c.code.default_project.clone(), c.code.notify))
                 .unwrap_or_default();
-            Ok(hydecode::summary(&hydecode::discover(), &default))
+            let mut summary = hydecode::summary(&hydecode::discover(), &default);
+            summary["notify"] = json!(notify);
+            summary["can_notify"] = json!(tools::which("notify-send").is_some());
+            Ok(summary)
         }
         (Method::Post, "/api/code/start") => {
             let message = hydecode::start(&hydecode::discover()).map_err(bad)?;
@@ -367,8 +391,7 @@ fn api(request: &mut Request, shared: &Shared, method: &Method, path: &str) -> A
         }
         (Method::Post, "/api/code/open") => {
             let body: CodeBody = read_json(request).map_err(bad)?;
-            let hub = hydecode::discover();
-            hydecode::ensure_up(&hub).map_err(bad)?;
+            let hub = hydecode::ensure_up(&hydecode::discover()).map_err(bad)?;
             let url = hydecode::office_url(&hub, body.project.as_deref()).map_err(bad)?;
             tools::open_url(&url).map_err(bad)?;
             Ok(json!({ "ok": true, "message": "Opened the Hyde Code office" }))
@@ -404,6 +427,16 @@ fn api(request: &mut Request, shared: &Shared, method: &Method, path: &str) -> A
             }
             let message = agent::code_command(&text).map_err(bad)?;
             Ok(json!({ "ok": true, "message": message }))
+        }
+        (Method::Post, "/api/code/notify") => {
+            let body: NotifyBody = read_json(request).map_err(bad)?;
+            let mut config = shared
+                .config
+                .lock()
+                .map_err(|_| (500, "config lock".to_string()))?;
+            config.code.notify = body.enabled;
+            config.save().map_err(|error| (500, error))?;
+            Ok(json!({ "ok": true, "notify": body.enabled }))
         }
         (Method::Post, "/api/code/default") => {
             let body: CodeBody = read_json(request).map_err(bad)?;

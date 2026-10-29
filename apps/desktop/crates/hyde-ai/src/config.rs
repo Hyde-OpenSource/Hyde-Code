@@ -13,11 +13,22 @@ pub struct Config {
 }
 
 /// Settings for the Hyde Code bridge.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CodeConfig {
     /// Hyde Code project id used when a request doesn't name one.
     pub default_project: String,
+    /// Desktop notifications when an agent asks something, needs approval or opens a PR.
+    pub notify: bool,
+}
+
+impl Default for CodeConfig {
+    fn default() -> Self {
+        Self {
+            default_project: String::new(),
+            notify: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

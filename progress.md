@@ -6,6 +6,23 @@
 ## How to write an entry
 
 ```markdown
+### 2026-10-30: Desktop app uses the hub client API v1 (typed tasks, client token, summary, notifications)
+- **Agent:** hyde-agent-25 (Claude Opus 5.5, claude-opus-5-5)
+- **Branch:** feature/hyde-ai
+- **What:** `apps/desktop` now finds the hub through `hub.json` (pid-checked) and uses the narrow `clients/hyde-ai.token`. It creates tasks with `POST /api/tasks` (requestId, project by name, agent), answers and decides with the typed endpoints, reads `GET /api/summary` for what needs the owner (including merges) and agent quota, and turns SSE `/api/events` into desktop notifications (toggle in the Hyde Code tab). Older hubs still work through the owner token and chat commands. The UI shows merges in "Waiting for you", quota bars on agents and a "Notify me" switch. `docs/HYDE_AI.md` §3 documents the v1 contract and the fallback.
+- **Why:** The hyde-code session shipped the client API (agent-hydeai-api/feature/hyde-ai-api, 24509e2) that this branch proposed.
+- **Files:** apps/desktop/crates/hyde-ai/src/{hydecode,agent,server,config}.rs, apps/desktop/crates/hyde-ai/ui/{app.js,index.html,style.css}, docs/HYDE_AI.md, progress.md
+- **Verified:** `pnpm desktop:test` (18 tests incl. new SSE/notice and hub.json port tests), clippy `-D warnings`, rustfmt. End to end against the real v1 hub from 24509e2 in a scratch HYDE_HOME with a `command` agent running `true`:
+  - Voice "hyde code … in demo app using echo" created T-1 via `/api/tasks` (source hyde-ai, actor client:hyde-ai).
+  - A project given by display name ("DEMO app") worked.
+  - An unknown project returned code `project`.
+  - Typed approve and answer returned the hub's 404 text.
+  - The summary was read.
+  - The SSE replay included `incident.raised`.
+  - The client token got 401 on `/api/config`.
+  - The scratch hub was stopped cleanly (hub.json removed), and its worktree and data were deleted.
+- **Open / follow-ups:** Needs `feature/hyde-ai-api` merged first (or together) for the v1 path; without it the desktop app falls back automatically.
+
 ### 2026-10-30: Merge the Hyde AI desktop assistant into this repo as one project
 - **Agent:** hyde-agent-25 (Claude Opus 5.5, claude-opus-5-5), working in a separate worktree so the hyde-code session's checkout was untouched
 - **Branch:** feature/hyde-ai (from feature/md-office a915f97)

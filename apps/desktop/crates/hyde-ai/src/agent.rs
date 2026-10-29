@@ -870,7 +870,7 @@ fn run_task(shared: &Shared, task: &Task) -> RunResult {
                 .lock()
                 .map(|c| c.code.default_project.clone())
                 .unwrap_or_default();
-            RunResult::from(hydecode::ensure_up(&hub).and_then(|_| {
+            RunResult::from(hydecode::ensure_up(&hub).and_then(|hub| {
                 let url = hydecode::office_url(&hub, Some(&default))?;
                 tools::open_url(&url).map(|_| "Opened the Hyde Code office".to_string())
             }))
@@ -1025,9 +1025,8 @@ pub fn url_encode(text: &str) -> String {
 
 /// Sends a hub command (starting the hub first if needed) and returns its reply.
 pub fn code_command(text: &str) -> Result<String, String> {
-    let hub = hydecode::discover();
-    hydecode::ensure_up(&hub)?;
-    let reply = hydecode::command(&hub, text)?;
+    let hub = hydecode::ensure_up(&hydecode::discover())?;
+    let reply = hydecode::run_command(&hub, text)?;
     Ok(if reply.is_empty() {
         "Done".into()
     } else {
@@ -1049,8 +1048,7 @@ pub fn code_task(
             "Tell me what Hyde Code should do, e.g. “hyde code add a footer in my site”.".into(),
         );
     }
-    let hub = hydecode::discover();
-    hydecode::ensure_up(&hub)?;
+    let hub = hydecode::ensure_up(&hydecode::discover())?;
     let state = hydecode::state(&hub)?;
     let projects = hydecode::projects(&state);
     if projects.is_empty() {
@@ -1074,15 +1072,54 @@ pub fn code_task(
     }
     .or_else(|| (!default_project.is_empty()).then(|| default_project.to_owned()))
     .or_else(|| (projects.len() == 1).then(|| projects[0].id.clone()));
-    let Some(project_id) = project_id else {
-        let names: Vec<String> = projects.iter().map(|p| format!("“{}”", p.name)).collect();
-        return Err(format!("Which project? End with “in <project>”, or set a default in the Hyde Code tab. Projects: {}.", names.join(", ")));
+    let project_list = || {
+        projects
+            .iter()
+            .map(|p| format!("“{}”", p.name))
+            .collect::<Vec<_>>()
+            .join(", ")
     };
+    let Some(project_id) = project_id else {
+        return Err(format!(
+            "Which project? End with “in <project>”, or set a default in the Hyde Code tab. Projects: {}.",
+            project_list()
+        ));
+    };
+    // Keep the task text from being read as trailing #project / @agent tags by the hub.
+    let body = body.trim().trim_end_matches(['#', '@']).to_string();
+
+    if hydecode::typed(&hub) {
+        let request_id = format!("hyde-ai-{}-{}", std::process::id(), next_id());
+        return match hydecode::create_task(
+            &hub,
+            &body,
+            Some(&project_id),
+            agent_tag.as_deref(),
+            &request_id,
+        ) {
+            Ok(task) => Ok(format!(
+                "Hyde Code created **{}** in #{} ({}). {}",
+                task.id,
+                task.project_id,
+                task.status.replace('_', " "),
+                task.text
+            )
+            .trim()
+            .to_owned()),
+            Err(error)
+                if error.code.as_deref() == Some("project")
+                    && !error.message.contains("Projects") =>
+            {
+                Err(format!("{} Projects: {}.", error.message, project_list()))
+            }
+            Err(error) => Err(error.message),
+        };
+    }
+
+    // Older hubs: the chat command.
     if !projects.iter().any(|p| p.id == project_id) {
         return Err(format!("Hyde Code has no project `{project_id}`."));
     }
-    // Keep the task text from being read as trailing #project / @agent tags by the hub.
-    let body = body.trim().trim_end_matches(['#', '@']).to_string();
     let mut command = format!("/new {body} #{project_id}");
     if let Some(agent) = agent_tag {
         command.push_str(&format!(" @{agent}"));
