@@ -1,3 +1,4 @@
+import { rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
@@ -11,6 +12,7 @@ import { installPrePushHook, LocalHost } from '@hyde/workspace';
 import { AgentPool, defaultAdapters } from './agents.ts';
 import { loadConfig, persistedSecret, type HubConfig } from './config.ts';
 import { detectAll } from './detect.ts';
+import { homePaths, loadHomeEnv } from './home.ts';
 import { createApi } from './http.ts';
 import { NodeHub } from './nodes.ts';
 import { Notifier } from './notifier.ts';
@@ -20,6 +22,8 @@ import { startSchedules } from './schedules.ts';
 
 const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`);
 const hydeRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+process.title = 'hyde-hub';
+loadHomeEnv();
 const config = loadConfig();
 const store = new EventStore(join(config.dataDir, 'events.db'));
 
@@ -74,15 +78,22 @@ for (const p of pool.profiles()) {
   const h = pool.health.get(p.name);
   log(`agent ${p.name} (${p.adapter}${p.model ? `, ${p.model}` : ''}): ${h?.installed && h.signedIn ? `ready${h.version ? ` v${h.version}` : ''}${h.account ? ` as ${h.account}` : ''}` : `unavailable: ${h?.problem ?? 'unknown'}`}`);
 }
-if (!pool.profiles().some((p) => pool.usable(p.name))) log('WARNING: no enabled agent is usable yet. Run `pnpm hyde setup` or open Settings in the dashboard.');
+if (!pool.profiles().some((p) => pool.usable(p.name))) log('WARNING: no enabled agent is usable yet. Run `hyde setup` or open Settings in the dashboard.');
 
-for (const project of config.projects) {
-  const result = await installPrePushHook(project.path, prePushHook(), HOOK_MARKER);
-  log(`#${project.id}: protected-branch pre-push hook ${result}`);
-  if (result === 'skipped-existing-hook') {
-    log(`#${project.id}: WARNING: a pre-push hook already exists, so the guard was not installed. Rely on GitHub branch protection.`);
+const guarded = new Set<string>();
+/** Installs the protected-branch guard in every project not seen yet (startup and reloads). */
+async function guardProjects(): Promise<void> {
+  for (const project of config.projects) {
+    if (guarded.has(project.path)) continue;
+    guarded.add(project.path);
+    const result = await installPrePushHook(project.path, prePushHook(), HOOK_MARKER);
+    log(`#${project.id}: protected-branch pre-push hook ${result}`);
+    if (result === 'skipped-existing-hook') {
+      log(`#${project.id}: WARNING: a pre-push hook already exists, so the guard was not installed. Rely on GitHub branch protection.`);
+    }
   }
 }
+await guardProjects();
 
 // ------------------------------------------------------------ gateways and orchestrator
 
@@ -130,12 +141,15 @@ const app = createApi({
     Object.assign(config, next);
     pool.reset();
     await pool.refreshHealth();
-    log('config reloaded');
+    await guardProjects();
+    log(`config reloaded (${config.projects.length} projects)`);
   },
 });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: config.port });
 nodeHub?.attach(server as never);
-log(`hub API and dashboard on ${hubUrl} (run \`pnpm hyde dashboard\` for a login link)`);
+log(`hub API and dashboard on ${hubUrl} (run \`hyde web\` to open it)`);
+const pidFile = homePaths().pid;
+writeFileSync(pidFile, String(process.pid));
 
 for (const [name, gateway] of gateways) {
   try {
@@ -148,7 +162,7 @@ for (const [name, gateway] of gateways) {
 const telegram = gateways.get('telegram') as TelegramGateway | undefined;
 const code = telegram?.issuePairingCode();
 if (code) log(`telegram: no allowed users yet. Send this to your bot to pair: /pair ${code}`);
-if (!gateways.size) log('no chat gateway configured; use the dashboard or `pnpm hyde ...`');
+if (!gateways.size) log('no chat gateway configured; use the dashboard or `hyde ...`');
 
 const stopSchedules = startSchedules(config.schedules, (inbound) => orchestrator.handle(inbound), log);
 orchestrator.start();
@@ -164,6 +178,7 @@ async function shutdown() {
   for (const g of gateways.values()) await g.stop().catch(() => undefined);
   server.close();
   store.close();
+  rmSync(pidFile, { force: true });
   process.exit(0);
 }
 process.on('SIGINT', shutdown);

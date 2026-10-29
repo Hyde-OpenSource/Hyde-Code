@@ -33,5 +33,8 @@ Short version of the rules:
 - 2026-10-29: Watch quota before real test runs; the owner's Claude 5-hour window hit 99% during testing.
 - 2026-10-29: Never name a scratch script after a stdlib module (pty.py shadowed `pty`); run scratch Python with -I.
 - 2026-10-29: Check UI work with real screenshots (Playwright) at desktop and phone widths; overlapping name tags and an overflowing board only showed up there.
+- 2026-10-29: An MIT repo can bundle assets under other licences (LICENSE-ASSETS): check art, maps and fonts separately before copying, and never vendor art whose licence forbids redistribution.
+- 2026-10-29: tsx's dynamic-import transform fails to parse a file that starts with a shebang; launch TS entry files through a wrapper script instead of `#!` lines.
+- 2026-10-29: Never accept terms or trust prompts on the owner's behalf; remove any trust records created while testing.
 
 <!-- devflow:end -->

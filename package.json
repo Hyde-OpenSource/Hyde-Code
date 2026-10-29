@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "hyde": "pnpm --silent --filter @hyde/hub cli",
-    "build": "pnpm --filter @hyde/web build"
+    "build": "pnpm --filter @hyde/web build",
+    "install-cli": "node scripts/install-cli.mjs"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

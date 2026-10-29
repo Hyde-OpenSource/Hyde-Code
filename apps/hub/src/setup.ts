@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { promisify } from 'node:util';
 import type { RawConfig } from './config.ts';
@@ -8,7 +8,7 @@ import { detectAll, type Detected } from './detect.ts';
 
 const exec = promisify(execFile);
 
-// `pnpm hyde setup`: asks which of the detected tools the owner wants to use. Nothing is
+// `hyde setup`: asks which of the detected tools the owner wants to use. Nothing is
 // compulsory: every agent, gateway and stage is a choice, and the answers become
 // hyde.config.json (settings) and .env (secrets, 0600).
 
@@ -77,7 +77,7 @@ export function upsertEnv(text: string, values: Record<string, string>): string 
   return out;
 }
 
-async function guessProject(path: string): Promise<{ baseBranch: string; checks: string[]; preview?: string }> {
+export async function guessProject(path: string): Promise<{ baseBranch: string; checks: string[]; preview?: string }> {
   const branches: string[] = await exec('git', ['branch', '--list', '--format=%(refname:short)'], { cwd: path }).then((r) => r.stdout.split('\n'), () => []);
   const baseBranch = branches.includes('staging') ? 'staging' : branches.includes('main') ? 'main' : (branches[0] ?? 'main');
   const pkg = join(path, 'package.json');
@@ -89,7 +89,7 @@ async function guessProject(path: string): Promise<{ baseBranch: string; checks:
   return { baseBranch, checks, ...(preview && { preview }) };
 }
 
-export async function runSetup(configFile: string, envFile: string): Promise<void> {
+export async function runSetup(configFile: string, envFile: string, opts: { projectPath?: string } = {}): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const ask = async (q: string, def = ''): Promise<string> => (await rl.question(`${q}${def ? ` [${def}]` : ''} `)).trim() || def;
   const yes = async (q: string, def: boolean): Promise<boolean> => /^y/i.test(await ask(`${q} (y/n)`, def ? 'y' : 'n'));
@@ -116,13 +116,13 @@ export async function runSetup(configFile: string, envFile: string): Promise<voi
     }
   }
   if (!agents.length) {
-    console.log('\nNo agent selected. Install and sign in to at least one CLI, then run setup again.');
+    console.log('\nNo agent selected. Install and sign in to at least one CLI, then run `hyde` again.');
     rl.close();
-    return;
+    return false;
   }
 
   console.log('\nProject:');
-  const path = resolve(await ask(' Path to the git repo agents will work on', existing?.projects?.[0]?.path ?? process.cwd()));
+  const path = resolve(await ask(' Path to the git repo agents will work on', opts.projectPath ?? existing?.projects?.[0]?.path ?? process.cwd()));
   if (!existsSync(join(path, '.git'))) throw new Error(`${path} is not a git repository`);
   const guess = await guessProject(path);
   const id = await ask(' Short id (used as #id in chat)', basename(path).toLowerCase().replace(/[^a-z0-9.-]+/g, '-'));
@@ -184,9 +184,11 @@ export async function runSetup(configFile: string, envFile: string): Promise<voi
     },
     existing,
   );
-  writeFileSync(configFile, JSON.stringify(config, null, 2) + '\n');
+  mkdirSync(dirname(configFile), { recursive: true, mode: 0o700 });
+  writeFileSync(configFile, JSON.stringify(existing ? config : { dataDir: 'data', ...config }, null, 2) + '\n');
   const envText = upsertEnv(existsSync(envFile) ? readFileSync(envFile, 'utf8') : '', env);
   writeFileSync(envFile, envText, { mode: 0o600 });
   chmodSync(envFile, 0o600);
-  console.log(`\nSaved ${configFile} and ${envFile}.\nStart the hub with \`pnpm start\`, then \`pnpm hyde dashboard\` for the web console.`);
+  console.log(`\nSaved ${configFile} and ${envFile}.`);
+  return true;
 }

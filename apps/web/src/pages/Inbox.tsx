@@ -123,7 +123,8 @@ export function NeedsYou({ state, refresh, notify }: Pick<PageProps, 'state' | '
   );
 }
 
-export function Inbox(props: PageProps) {
+export function Inbox(all: PageProps) {
+  const props = { ...all, state: all.scoped };
   const incidents = [...props.state.incidents].reverse().slice(0, 10);
   return (
     <>

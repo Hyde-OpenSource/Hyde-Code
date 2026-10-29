@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { homedir } from 'node:os';
+import { extname, isAbsolute, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { describeEvent, normalizeCommandText, parseCommand, snapshot, TOOLS_NAMES, type Command, type EventStore } from '@hyde/core';
@@ -12,6 +13,9 @@ import { readRawConfig, writeRawConfig, type HubConfig } from './config.ts';
 import type { Detected } from './detect.ts';
 import type { HostOps } from './host.ts';
 import { agentMetrics, prometheus } from './metrics.ts';
+import { TILE_FILES, tilePath } from './tiles.ts';
+import { TERMS_URL, TERMS_VERSION, trustFolder } from './home.ts';
+import { addProject, isGitRepo, removeProject } from './projects.ts';
 import type { Orchestrator } from './orchestrator.ts';
 
 export interface ApiDeps {
@@ -60,7 +64,7 @@ export function createApi(deps: ApiDeps): Hono {
   // Cookie-authenticated writes must be JSON, which a cross-site form can't send without CORS.
   const owner = async (c: Context, next: () => Promise<void>) => {
     if (!isOwner(c)) return c.json({ error: 'owner login required' }, 401);
-    if (c.req.method !== 'GET' && !bearer(c.req.header('authorization')) && !c.req.header('content-type')?.startsWith('application/json')) {
+    if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && !bearer(c.req.header('authorization')) && !c.req.header('content-type')?.startsWith('application/json')) {
       return c.json({ error: 'JSON body required' }, 415);
     }
     await next();
@@ -100,9 +104,11 @@ export function createApi(deps: ApiDeps): Hono {
 
   app.get('/login', (c) => {
     const token = c.req.query('token') ?? '';
-    if (!token || !same(token, deps.ownerToken)) return c.text('Invalid token. Run `pnpm hyde dashboard` for a fresh link.', 401);
+    if (!token || !same(token, deps.ownerToken)) return c.text('Invalid token. Run `hyde web` for a fresh link.', 401);
     setCookie(c, COOKIE, token, { httpOnly: true, sameSite: 'Strict', path: '/', maxAge: 60 * 60 * 24 * 30 });
-    return c.redirect('/');
+    // `hyde web` in a project folder opens the office on that project.
+    const project = c.req.query('project');
+    return c.redirect(project && /^[\w.-]+$/.test(project) ? `/?project=${project}#office` : '/');
   });
 
   app.post('/api/commands', owner, async (c) => {
@@ -124,7 +130,7 @@ export function createApi(deps: ApiDeps): Hono {
     c.json({
       ...snapshot(orchestrator.state),
       agents: config.agents.map((a) => ({ ...a, vendor: deps.pool.vendor(a.name), health: deps.pool.health.get(a.name) ?? null })),
-      projects: config.projects.map((p) => ({ id: p.id, name: p.name ?? p.id, baseBranch: p.baseBranch, releaseBranch: p.releaseBranch, checks: p.checks, preview: Boolean(p.preview) })),
+      projects: config.projects.map((p) => ({ id: p.id, name: p.name ?? p.id, path: p.path, baseBranch: p.baseBranch, releaseBranch: p.releaseBranch, checks: p.checks, preview: Boolean(p.preview) })),
       metrics: agentMetrics(orchestrator.state),
       stages: { planner: config.planner.enabled, review: config.review.enabled, browser: config.browser.enabled, policy: config.policy.enabled },
     }),
@@ -168,6 +174,15 @@ export function createApi(deps: ApiDeps): Hono {
     }
   });
 
+  // The owner's own LimeZu tiles for the office floor (never shipped with Hyde Code).
+  app.get('/api/tiles', owner, (c) => c.json({ files: TILE_FILES.filter((f) => tilePath(config.dataDir, f)) }));
+  app.on(['GET', 'HEAD'], '/api/tiles/:name', owner, (c) => {
+    const p = tilePath(config.dataDir, c.req.param('name') ?? '');
+    if (!p) return c.json({ error: 'not installed' }, 404);
+    const body = c.req.method === 'HEAD' ? null : (Readable.toWeb(createReadStream(p)) as ReadableStream);
+    return new Response(body, { headers: { 'content-type': 'image/png', 'content-length': String(statSync(p).size), 'cache-control': 'private, max-age=3600' } });
+  });
+
   app.get('/api/artifacts/:id', owner, (c) => {
     const artifact = orchestrator.state.artifacts.get(c.req.param('id') ?? '');
     // Only files the harness itself recorded, under its own data dir.
@@ -194,6 +209,34 @@ export function createApi(deps: ApiDeps): Hono {
     const raw = await c.req.json().catch(() => null);
     try {
       writeRawConfig(config.configFile, raw);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    await deps.reload();
+    return c.json({ ok: true });
+  });
+
+  // Projects: folders the owner trusts. Adding one records the trust and the accepted terms.
+  app.get('/api/projects', owner, (c) => c.json({ projects: config.projects.map((p) => ({ id: p.id, name: p.name ?? p.id, path: p.path })), terms: { version: TERMS_VERSION, url: TERMS_URL } }));
+  app.post('/api/projects', owner, async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { path?: unknown; trust?: unknown } | null;
+    const path = typeof body?.path === 'string' ? body.path.trim().replace(/^~(?=\/|$)/, homedir()) : '';
+    if (!path || !isAbsolute(path)) return c.json({ error: 'Give the full path of the folder, e.g. /home/you/code/app' }, 400);
+    if (body?.trust !== true) return c.json({ error: 'Trust the folder and accept the terms to add it' }, 400);
+    if (!existsSync(path)) return c.json({ error: `${path} does not exist` }, 400);
+    if (!isGitRepo(path)) return c.json({ error: `${path} is not a git repository. Run \`git init\` there first (or run \`hyde\` in it, which offers to).` }, 400);
+    try {
+      const { project, added } = await addProject(config.configFile, path);
+      trustFolder(path);
+      if (added) await deps.reload();
+      return c.json({ ok: true, added, project: { id: project.id, name: project.name ?? project.id, path: project.path } });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+  app.delete('/api/projects/:id', owner, async (c) => {
+    try {
+      removeProject(config.configFile, c.req.param('id') ?? '');
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }

@@ -13,7 +13,7 @@ const COLUMNS: [string, string[]][] = [
 ];
 
 /** Task board (Vibe Kanban's pattern), with blocked and failed tasks tagged in their column. */
-export function Board({ state }: PageProps) {
+export function Board({ scoped: state }: PageProps) {
   const visible = state.tasks.filter((t) => t.status !== 'cancelled');
   const placed = (t: (typeof visible)[number]) => {
     if (t.status === 'blocked') return t.statusHistory.at(-1)?.from ?? 'running';
