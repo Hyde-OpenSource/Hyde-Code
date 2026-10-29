@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Hyde Code launcher. Install it on your PATH with `pnpm install-cli`, then run `hyde` in any folder.
+set -e
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+HUB="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+unset INIT_CWD
+exec "$HUB/node_modules/.bin/tsx" "$HUB/src/cli.ts" "$@"

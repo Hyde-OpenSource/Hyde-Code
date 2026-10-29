@@ -15,7 +15,7 @@ import { NeedsYou, inboxCount } from './Inbox.tsx';
 // The office, laid out like Munder Difflin: the floor on the left, the selected agent
 // (or Hyde's Command Center) on the right, the team strip along the bottom.
 
-export function Office({ state, refresh, notify, feed }: PageProps) {
+export function Office({ state, scoped, project, refresh, notify, feed }: PageProps) {
   useOfficeBridge(state);
   const selectedId = useStore((s) => s.selectedId);
   const tilesLicensed = useStore((s) => s.tilesLicensed);
@@ -33,7 +33,7 @@ export function Office({ state, refresh, notify, feed }: PageProps) {
                 Tiles: <a href="https://limezu.itch.io/" target="_blank" rel="noreferrer">Modern Interiors by LimeZu</a>
               </>
             ) : (
-              <>Simple tiles. Add your LimeZu copy with <code>pnpm hyde tiles &lt;folder&gt;</code> for the full art.</>
+              <>Simple tiles. Add your LimeZu copy with <code>hyde tiles &lt;folder&gt;</code> for the full art.</>
             )}
           </div>
         </div>
@@ -41,17 +41,17 @@ export function Office({ state, refresh, notify, feed }: PageProps) {
           {selected ? (
             <AgentDetail state={state} name={selected.name} refresh={refresh} notify={notify} />
           ) : (
-            <CommandCenter state={state} refresh={refresh} notify={notify} feed={feed} />
+            <CommandCenter state={scoped} refresh={refresh} notify={notify} feed={feed} project={project ? state.projects.find((p) => p.id === project) : undefined} />
           )}
         </aside>
       </div>
-      <TeamStrip state={state} agents={agents} selectedId={selectedId} refresh={refresh} notify={notify} />
+      <TeamStrip state={state} agents={agents} selectedId={selectedId} refresh={refresh} notify={notify} project={project} />
     </div>
   );
 }
 
 /** The bottom dock: one card per agent (Hyde first), then the dispatch box. */
-function TeamStrip({ state, agents, selectedId, refresh, notify }: Pick<PageProps, 'state' | 'refresh' | 'notify'> & { agents: ReturnType<typeof toAgents>; selectedId: string | null }) {
+function TeamStrip({ state, agents, selectedId, refresh, notify, project }: Pick<PageProps, 'state' | 'refresh' | 'notify' | 'project'> & { agents: ReturnType<typeof toAgents>; selectedId: string | null }) {
   const select = useStore((s) => s.select);
   const waiting = inboxCount(state);
   return (
@@ -84,14 +84,14 @@ function TeamStrip({ state, agents, selectedId, refresh, notify }: Pick<PageProp
           );
         })}
       </div>
-      <Dispatch state={state} refresh={refresh} notify={notify} agent={selectedId && selectedId !== GOD_ID ? selectedId : ''} />
+      <Dispatch key={project ?? 'all'} state={state} refresh={refresh} notify={notify} agent={selectedId && selectedId !== GOD_ID ? selectedId : ''} project={project} />
     </div>
   );
 }
 
-function Dispatch({ state, refresh, notify, agent }: Pick<PageProps, 'state' | 'refresh' | 'notify'> & { agent: string }) {
+function Dispatch({ state, refresh, notify, agent, project: picked }: Pick<PageProps, 'state' | 'refresh' | 'notify'> & { agent: string; project: string | null }) {
   const [text, setText] = useState('');
-  const [project, setProject] = useState(state.projects[0]?.id ?? '');
+  const [project, setProject] = useState(picked ?? state.projects[0]?.id ?? '');
   const [client, setClient] = useState(false);
   const [busy, setBusy] = useState(false);
   const send = async () => {
@@ -154,7 +154,7 @@ const TABS: [CommandCenterTab, string][] = [
 ];
 
 /** Hyde's Command Center: the task board, what needs you, and the activity log. */
-function CommandCenter({ state, refresh, notify, feed }: Pick<PageProps, 'state' | 'refresh' | 'notify'> & { feed: FeedLine[] }) {
+function CommandCenter({ state, refresh, notify, feed, project }: Pick<PageProps, 'state' | 'refresh' | 'notify'> & { feed: FeedLine[]; project?: { id: string; name: string; path: string } }) {
   const tab = useStore((s) => s.commandCenterTab);
   const waiting = inboxCount(state);
   useEffect(() => {
@@ -171,7 +171,7 @@ function CommandCenter({ state, refresh, notify, feed }: Pick<PageProps, 'state'
   return (
     <PixelPanel variant="default" noPadding style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div className="md-panel-title">
-        <span>COMMAND CENTER</span>
+        <span title={project?.path}>{project ? project.name.toUpperCase() : 'COMMAND CENTER'}</span>
         <PixelBadge status={waiting ? 'blocked' : 'idle'} label={waiting ? `${waiting} for you` : 'all clear'} />
       </div>
       <div className="md-tabs cth-tabbar" role="tablist">

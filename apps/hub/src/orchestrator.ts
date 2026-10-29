@@ -314,7 +314,7 @@ export class Orchestrator {
         if (mode === 'review') return false;
         if (!this.retryAt.has(`none:${task.id}`)) {
           this.retryAt.set(`none:${task.id}`, this.now());
-          await this.notifyTask(task, { text: `${task.id} can't start: ${routed.none}. Enable an agent in Settings or with \`pnpm hyde setup\`.` });
+          await this.notifyTask(task, { text: `${task.id} can't start: ${routed.none}. Enable an agent in Settings or with \`hyde setup\`.` });
         }
         return false;
       }

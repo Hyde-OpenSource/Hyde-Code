@@ -1,6 +1,7 @@
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { useHub } from './api.ts';
+import { scopeState, useHub } from './api.ts';
+import { ProjectSelect, ProjectsSidebar, useProject } from './Projects.tsx';
 import { Audit } from './pages/Audit.tsx';
 import { Board } from './pages/Board.tsx';
 import { Inbox, inboxCount } from './pages/Inbox.tsx';
@@ -57,7 +58,7 @@ function ThemeToggle() {
 /** Explains how to switch to the terminal UI; both read the same hub, so nothing is lost. */
 function TerminalMode({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false);
-  const cmd = 'pnpm hyde tui';
+  const cmd = 'hyde';
   useEffect(() => {
     const on = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', on);
@@ -67,7 +68,7 @@ function TerminalMode({ onClose }: { onClose: () => void }) {
     <div className="modal-back" onClick={onClose}>
       <div className="panel modal" role="dialog" aria-modal="true" aria-labelledby="tm-title" onClick={(e) => e.stopPropagation()}>
         <h2 id="tm-title">Switch to the terminal</h2>
-        <p>The same office, in your terminal. It talks to the same hub, so tasks, questions and approvals carry over. Press <kbd>w</kbd> there to come back here.</p>
+        <p>Run it in your project folder: the same office, in your terminal. It talks to the same hub, so tasks, questions and approvals carry over. Press <kbd>w</kbd> there to come back here.</p>
         <div className="cmd">
           <code>$ {cmd}</code>
           <button
@@ -96,6 +97,7 @@ function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [term, setTerm] = useState(false);
   const [page, arg] = hash.split('/');
+  const [project, setProject] = useProject(hub.state);
 
   if (hub.needsLogin) {
     return (
@@ -103,15 +105,19 @@ function App() {
         <div className="panel login">
           <Logo />
           <h1>Hyde Code</h1>
-          <p>Log in by opening the link from <code>pnpm hyde dashboard</code> on the hub machine.</p>
+          <p>Run <code>hyde web</code> on the machine where Hyde runs. It opens this page logged in.</p>
         </div>
       </main>
     );
   }
   if (!hub.state) return <main className="center">{hub.error ? `Can't reach the hub: ${hub.error}` : 'Opening the office…'}</main>;
   const s = hub.state;
-  const ctx = { state: s, refresh: hub.refresh, notify: setToast, feed: hub.feed };
-  const count = inboxCount(s);
+  const scoped = scopeState(s, project);
+  const ids = new Set(scoped.tasks.map((t) => t.id));
+  const feed = project ? hub.feed.filter((l) => !l.taskId || ids.has(l.taskId)) : hub.feed;
+  const ctx = { state: s, scoped, project, refresh: hub.refresh, notify: setToast, feed };
+  const count = inboxCount(scoped);
+  const here = project ? s.projects.find((p) => p.id === project) : undefined;
   const current = page === 'task' ? 'board' : page === 'floor' ? 'office' : page;
 
   return (
@@ -128,6 +134,7 @@ function App() {
             </a>
           ))}
         </nav>
+        <ProjectSelect state={s} project={project} onPick={setProject} />
         <div className="top-right">
           <span className={`live ${hub.connected ? 'on' : ''}`}>{hub.connected ? 'LIVE' : 'RECONNECTING'}</span>
           <ThemeToggle />
@@ -136,7 +143,14 @@ function App() {
           </button>
         </div>
       </header>
+      <div className="body">
+      <ProjectsSidebar state={s} project={project} onPick={setProject} notify={setToast} refresh={hub.refresh} />
       <main className={current === 'office' ? 'office-main' : current === 'board' && page !== 'task' ? 'wide' : ''}>
+        {here && current !== 'office' && (
+          <div className="here">
+            <Icon name="folder" /> <strong>{here.name}</strong> <span className="meta">{here.path}</span>
+          </div>
+        )}
         {page === 'task' && arg ? (
           <TaskPage id={arg} {...ctx} />
         ) : current === 'inbox' ? (
@@ -153,6 +167,7 @@ function App() {
           <Office {...ctx} />
         )}
       </main>
+      </div>
       {term && <TerminalMode onClose={() => setTerm(false)} />}
       {toast && <Toast text={toast} onDone={() => setToast(null)} />}
     </div>

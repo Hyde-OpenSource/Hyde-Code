@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentProfile } from '@hyde/core';
 import { z } from 'zod';
+import { homePaths } from './home.ts';
 
 // hyde.config.json holds non-secret settings; secrets come only from the environment (.env).
 // Everything is optional except one project and one enabled agent: the owner picks which CLIs,
-// gateways and stages to use (`pnpm hyde setup`, or Settings in the dashboard).
+// gateways and stages to use (`hyde setup`, or Settings in the dashboard).
 
 const ROLES = ['plan', 'implement', 'review', 'ui', 'bulk', 'triage'] as const;
 
@@ -240,12 +241,17 @@ export function parseConfig(raw: unknown, configFile: string, env: NodeJS.Proces
   };
 }
 
-/** Loads hyde.config.json and secrets from the environment, creating the data dir. */
-export function loadConfig(path = process.env.HYDE_CONFIG ?? 'hyde.config.json'): HubConfig {
+/** Where the config lives: $HYDE_CONFIG, else ~/.hyde/config.json. */
+export function configPath(): string {
   // pnpm runs scripts inside apps/hub; INIT_CWD is where the command was typed.
-  const file = resolve(process.env.INIT_CWD ?? process.cwd(), path);
+  return process.env.HYDE_CONFIG ? resolve(process.env.INIT_CWD ?? process.cwd(), process.env.HYDE_CONFIG) : homePaths().config;
+}
+
+/** Loads the config and secrets from the environment, creating the data dir. */
+export function loadConfig(path = configPath()): HubConfig {
+  const file = resolve(path);
   if (!existsSync(file)) {
-    throw new Error(`Config not found: ${file}. Run \`pnpm hyde setup\`, or copy hyde.config.example.json to hyde.config.json.`);
+    throw new Error(`Config not found: ${file}. Run \`hyde\` in a project folder to set Hyde Code up.`);
   }
   const config = parseConfig(JSON.parse(readFileSync(file, 'utf8')), file);
   mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
