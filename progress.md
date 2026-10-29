@@ -18,6 +18,16 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+
+### 2026-10-29: T-4: Add a .editorconfig at the repo root: utf-8, LF line endings, final n...
+- **Agent:** opencode-1 (opencode/big-pickle)
+- **Branch:** opencode-1/feature/t-4-add-a-editorconfig-at-the-repo-root-utf
+- **What:** Added .editorconfig at repo root with utf-8, LF, final newline, trim trailing whitespace, and 2-space indent for all files.
+- **Why:** Requested via cli: Add a .editorconfig at the repo root: utf-8, LF line endings, final newline, trim trailing whitespace, 2-space indent for all files. Nothing else.
+- **Files:** .editorconfig
+- **Verified:** Verified .editorconfig contains exactly the required settings. Committed the change.; reviewed by claude-1: approve
+- **Open / follow-ups:** none
+
 ### 2026-10-29: Office UI redesign (web) and a terminal UI
 - **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
 - **Branch:** feature/office-ui
@@ -71,8 +81,6 @@
 - **Files:** CLAUDE.md, context.md, progress.md, agents.md, AgentQuestions.md, AgentAnswers.md, role.md, tasks.md, report.md, docs/plan.md
 - **Verified:** `git branch -a` shows main and staging at 4ebbcf3; the bootstrap script reported every file as created.
 - **Open / follow-ups:** No remote yet (owner will give URLs).
-
-
 
 ## History (rebuilt from earlier records)
 <!-- Filled from git log / older notes at setup time. Leave empty if there was no history. -->
