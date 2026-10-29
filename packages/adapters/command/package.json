@@ -1,0 +1,8 @@
+{
+  "name": "@hyde/adapter-command",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@hyde/adapter-common": "workspace:*", "@hyde/core": "workspace:*" }
+}

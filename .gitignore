@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+# Runtime data (event store, worktrees, run files)
+.hyde/
+# Plan exports kept locally; docs/plan.md is the source of truth
+*.pdf
+*.docx
+hyde.config.json
