@@ -9,7 +9,11 @@ import { Settings } from './pages/Settings.tsx';
 import { TaskPage } from './pages/TaskPage.tsx';
 import { Usage } from './pages/Usage.tsx';
 import { Toast } from './ui.tsx';
+import '@/design/fonts.css';
+import '@/design/tokens.css';
 import './styles.css';
+import { toggleAppTheme, useAppTheme } from '@/design/theme';
+import { Icon } from '@/components/Icon';
 
 const PAGES = [
   ['office', 'Office'],
@@ -32,12 +36,21 @@ function useHash(): string {
 
 function Logo() {
   return (
-    <svg className="logo" viewBox="0 0 8 8" width="22" height="22" aria-hidden="true" shapeRendering="crispEdges">
-      <rect width="8" height="8" fill="var(--accent)" />
-      <rect x="1" y="1" width="2" height="6" fill="var(--accent-ink)" />
-      <rect x="5" y="1" width="2" height="6" fill="var(--accent-ink)" />
-      <rect x="3" y="3" width="2" height="2" fill="var(--accent-ink)" />
+    <svg className="logo" viewBox="0 0 8 8" width="20" height="20" aria-hidden="true" shapeRendering="crispEdges">
+      <rect width="8" height="8" fill="var(--cth-lemon)" />
+      <rect x="1" y="1" width="2" height="6" fill="var(--cth-on-accent)" />
+      <rect x="5" y="1" width="2" height="6" fill="var(--cth-on-accent)" />
+      <rect x="3" y="3" width="2" height="2" fill="var(--cth-on-accent)" />
     </svg>
+  );
+}
+
+function ThemeToggle() {
+  const theme = useAppTheme();
+  return (
+    <button className="top-btn" onClick={() => toggleAppTheme()} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} title="Light / dark">
+      {theme === 'dark' ? '☀' : '☾'}
+    </button>
   );
 }
 
@@ -117,12 +130,13 @@ function App() {
         </nav>
         <div className="top-right">
           <span className={`live ${hub.connected ? 'on' : ''}`}>{hub.connected ? 'LIVE' : 'RECONNECTING'}</span>
-          <button className="btn small" onClick={() => setTerm(true)} title="Use Hyde Code from your terminal">
-            ⌨ Terminal
+          <ThemeToggle />
+          <button className="top-btn" onClick={() => setTerm(true)} title="Use Hyde Code from your terminal">
+            <Icon name="terminal" /> Terminal
           </button>
         </div>
       </header>
-      <main className={current === 'office' || (current === 'board' && page !== 'task') ? 'wide' : ''}>
+      <main className={current === 'office' ? 'office-main' : current === 'board' && page !== 'task' ? 'wide' : ''}>
         {page === 'task' && arg ? (
           <TaskPage id={arg} {...ctx} />
         ) : current === 'inbox' ? (

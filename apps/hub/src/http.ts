@@ -12,6 +12,7 @@ import { readRawConfig, writeRawConfig, type HubConfig } from './config.ts';
 import type { Detected } from './detect.ts';
 import type { HostOps } from './host.ts';
 import { agentMetrics, prometheus } from './metrics.ts';
+import { TILE_FILES, tilePath } from './tiles.ts';
 import type { Orchestrator } from './orchestrator.ts';
 
 export interface ApiDeps {
@@ -60,7 +61,7 @@ export function createApi(deps: ApiDeps): Hono {
   // Cookie-authenticated writes must be JSON, which a cross-site form can't send without CORS.
   const owner = async (c: Context, next: () => Promise<void>) => {
     if (!isOwner(c)) return c.json({ error: 'owner login required' }, 401);
-    if (c.req.method !== 'GET' && !bearer(c.req.header('authorization')) && !c.req.header('content-type')?.startsWith('application/json')) {
+    if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && !bearer(c.req.header('authorization')) && !c.req.header('content-type')?.startsWith('application/json')) {
       return c.json({ error: 'JSON body required' }, 415);
     }
     await next();
@@ -166,6 +167,15 @@ export function createApi(deps: ApiDeps): Hono {
     } catch (err) {
       return c.json({ error: (err as Error).message }, 500);
     }
+  });
+
+  // The owner's own LimeZu tiles for the office floor (never shipped with Hyde Code).
+  app.get('/api/tiles', owner, (c) => c.json({ files: TILE_FILES.filter((f) => tilePath(config.dataDir, f)) }));
+  app.on(['GET', 'HEAD'], '/api/tiles/:name', owner, (c) => {
+    const p = tilePath(config.dataDir, c.req.param('name') ?? '');
+    if (!p) return c.json({ error: 'not installed' }, 404);
+    const body = c.req.method === 'HEAD' ? null : (Readable.toWeb(createReadStream(p)) as ReadableStream);
+    return new Response(body, { headers: { 'content-type': 'image/png', 'content-length': String(statSync(p).size), 'cache-control': 'private, max-age=3600' } });
   });
 
   app.get('/api/artifacts/:id', owner, (c) => {

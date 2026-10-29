@@ -32,12 +32,19 @@ pnpm hyde tui          # or: the same office in your terminal
 
 Both read the same hub, so you can switch at any time and nothing is lost.
 
-- **Web** (`pnpm hyde dashboard`): a pixel-art office. Each agent is a person at a desk: typing when
-  working, at the war-room whiteboard when planning, at the war-room table when reviewing, in the
-  kitchen when free. Hyde (the hub) sits in the corner office and envelopes fly when work is handed
-  out, questions reach your desk, reviews come back and PRs go out. Click a person to watch their
-  session live. The side panel has *Needs you* (answer, approve, merge), *Team* and *Activity*.
-  The **⌨ Terminal** button shows how to switch.
+- **Web** (`pnpm hyde dashboard`): the office from [Munder Difflin](https://github.com/chaitanyagiri/munder-difflin)
+  (MIT), ported in `apps/web/src/md`. Each agent is a person on the floor: at their desk
+  with the monitor lit while working, wandering, on coffee breaks or errands when free,
+  walking to the door when they need you. Hyde (the hub) is the boss at the corner desk.
+  Envelopes fly for hand-offs, questions, reviews and PRs; the wall boards show the
+  tasks. The right side is Hyde's Command Center (Tasks, Ask me, Activity) or the
+  selected agent with its live session; the bottom strip has the agent cards and the
+  dispatch box. Light and dark themes. The **Terminal** button shows how to switch.
+- **Floor art**: the office map uses LimeZu's "Modern Interiors" tiles, which may not be
+  redistributed, so Hyde Code ships simple stand-in tiles. If you own the pack
+  ([limezu.itch.io/moderninteriors](https://limezu.itch.io/moderninteriors)), run
+  `pnpm hyde tiles <unzipped folder>` once; it finds the three sheets the map needs (or
+  pass `interiors.png=<file>` etc. by hand) and keeps them in `.hyde/` (gitignored).
 - **Terminal** (`pnpm hyde tui`): rooms, the team table with quota bars and the selected agent's
   live session. Keys: `1`–`5` screens (Office, Board, Inbox, Activity, Usage), `↑↓` pick,
   `enter` open, `a` approve or merge, `d` deny, `r` reply, `n` new task, `c` client message,
@@ -99,9 +106,15 @@ pnpm typecheck   # tsc (hub, packages, web)
 | Path | Contents |
 |---|---|
 | `apps/hub` | Config, orchestrator, router, planner, review, policy, merge queue, notifier, API, CLI, setup, terminal UI (`tui*.ts`) |
-| `apps/web` | Web dashboard: pixel office (`src/office`), Board, Inbox, Task, Usage, Audit, Settings |
+| `apps/web` | Web dashboard: the office (`src/md`, ported from Munder Difflin), Board, Inbox, Task, Usage, Audit, Settings |
 | `apps/node` | Worker node for teammates' machines |
 | `packages/core` | Contracts, event schemas, event store, projections, lifecycle, chat commands |
 | `packages/adapters/*` | claude-code, codex, opencode, acp, command, and the shared process base |
 | `packages/gateways/*` | telegram, slack, discord, whatsapp |
 | `packages/workspace`, `policy`, `devflow`, `mcp-harness` | Git and hosts, rules, devflow files, agent tools |
+
+## Credits
+- Office UI, scene engine and design system: [Munder Difflin](https://github.com/chaitanyagiri/munder-difflin) by Chaitanya Giri (MIT).
+- Office map: [shahar061/the-office](https://github.com/shahar061/the-office) (ISC).
+- Fonts: Press Start 2P, Inter, JetBrains Mono (SIL OFL 1.1).
+- Floor tiles, when you import your own copy: [Modern Interiors by LimeZu](https://limezu.itch.io/).
