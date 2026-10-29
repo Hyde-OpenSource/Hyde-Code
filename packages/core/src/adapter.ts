@@ -86,6 +86,11 @@ export interface AgentAdapter {
   readonly vendor: Vendor;
   /** Whether the CLI can return output that follows a JSON Schema. */
   readonly structuredOutput: boolean;
+  /**
+   * False when the CLI's sandbox keeps .git read-only (Codex workspace-write): the agent leaves
+   * changes uncommitted and the harness commits them with the agent's summary.
+   */
+  readonly canCommit?: boolean;
   detect(): Promise<DetectResult>;
   start(runId: string, spec: RunSpec): Promise<RunHandle>;
   send(run: RunHandle, text: string): Promise<void>;

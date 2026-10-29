@@ -149,6 +149,32 @@ describe('Phase 1: many agents', () => {
     expect(agents).toEqual(new Set(['claude-1', 'codex-1']));
   });
 
+  it('commits for agents whose sandbox keeps .git read-only (regression: Codex index.lock)', async () => {
+    h = await makeHarness({
+      agents: [
+        {
+          name: 'codex-1',
+          vendor: 'openai',
+          turns: [
+            async ({ runId, spec, o }) => {
+              writeFileSync(join(spec.cwd, 'hello.txt'), 'hi\n');
+              await o.agentCall(runId, 'complete_task', { summary: 'Add hello.txt greeting', verified: 'cat hello.txt' });
+              return [{ type: 'run.completed', summary: 'done' }];
+            },
+          ],
+        },
+      ],
+    });
+    (h.adapters['codex-1'] as unknown as { canCommit: boolean }).canCommit = false;
+    await h.o.handle(h.inbound({ kind: 'new', text: 'Add a hello file' }));
+    await h.until(() => h.o.state.approvals.has('A-1'), 'verified');
+    const packet = readFileSync(join(h.o.config.dataDir, 'runs', 'run-1', 'packet.md'), 'utf8');
+    expect(packet).toContain('Do NOT run git add or git commit');
+    const wt = h.o.state.tasks.get('T-1')!.worktree!;
+    expect(await git(wt, ['log', '--format=%s', '-2'])).toBe('T-1: progress.md entry\nT-1: Add hello.txt greeting');
+    expect(readFileSync(join(wt, 'progress.md'), 'utf8')).not.toContain('left uncommitted');
+  });
+
   it('honours @agent pins and reports unknown agents', async () => {
     h = await makeHarness({
       agents: [

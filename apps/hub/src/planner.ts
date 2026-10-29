@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 // The planner (docs/plan.md "The orchestrator brain"): one structured call that returns open
 // questions and a task graph. Code then checks the plan; the model only decides content.
+// The schema is "strict" (every property required) because OpenAI's structured outputs reject
+// anything else; optional values are empty arrays or strings instead.
 
 export const PLAN_SCHEMA = {
   type: 'object',
@@ -13,7 +15,7 @@ export const PLAN_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['text', 'blocking'],
+        required: ['text', 'blocking', 'options'],
         properties: {
           text: { type: 'string' },
           blocking: { type: 'boolean' },
@@ -26,7 +28,7 @@ export const PLAN_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['key', 'title', 'doneWhen', 'writeScope', 'role', 'dependsOn', 'size'],
+        required: ['key', 'title', 'spec', 'doneWhen', 'writeScope', 'role', 'dependsOn', 'size'],
         properties: {
           key: { type: 'string' },
           title: { type: 'string' },

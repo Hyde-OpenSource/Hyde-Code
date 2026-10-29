@@ -18,6 +18,15 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-10-29: Real end-to-end runs on Hyde-Code; fixes for Codex, OpenAI schemas, stale base, OpenCode
+- **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
+- **Branch:** feature/roadmap-phases-1-4
+- **What:** (1) The harness commits for agents whose sandbox keeps .git read-only (Codex), before checks and review, and tells them not to commit. (2) Plan and review JSON schemas made OpenAI strict-mode valid (every property required, nullable file/line). (3) Task branches are cut from, and diffed against, a freshly fetched origin/<base> instead of the local base branch. (4) OpenCode turns that end on a tool step are no longer reported as "no output" crashes. (5) Questions and approvals of cancelled tasks are hidden from status and the inbox. README and .env.example rewritten for all phases.
+- **Why:** Found by real runs against Hyde-Code (the owner chose it as the test repo).
+- **Files:** apps/hub/src/{orchestrator,planner,review}.ts, packages/adapters/{codex,opencode}/src/index.ts, packages/core/src/adapter.ts, packages/devflow/src/index.ts, apps/web/src/pages/Inbox.tsx, tests, README.md, .env.example
+- **Verified:** 124 tests, typecheck clean, regression tests for each fix. Real runs: T-3 planned and written by Codex, reviewed by Claude (approve), PR #4 opened into staging; T-4 planned and written by OpenCode (free model), reviewed by Claude with the diff, PR #5 opened into staging. Neither was merged.
+- **Open / follow-ups:** Telegram/Slack/Discord/WhatsApp still untested live (no tokens). Merge queue and /promote only tested against a local bare remote. PRs #4 and #5 wait for the owner.
+
 ### 2026-10-29: Roadmap phases 1-4, dashboard and setup wizard
 - **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
 - **Branch:** feature/roadmap-phases-1-4

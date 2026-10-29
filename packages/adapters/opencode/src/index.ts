@@ -60,6 +60,7 @@ export class OpenCodeParser implements LineParser {
   private stopped = false;
   private error = '';
   private started = false;
+  private steps = 0;
 
   constructor(
     private readonly model: string,
@@ -103,6 +104,7 @@ export class OpenCodeParser implements LineParser {
           outputTokens: (t.output ?? 0) + (t.reasoning ?? 0),
           ...(typeof part.cost === 'number' && { costUsd: part.cost }),
         });
+        this.steps++;
         if (part.reason === 'stop') this.stopped = true;
         break;
       }
@@ -119,7 +121,8 @@ export class OpenCodeParser implements LineParser {
       const detail = this.error || `exit code ${exit.code} signal ${exit.signal}`;
       return [{ type: 'run.failed', reason: failureFromText(detail), detail }];
     }
-    if (!this.stopped && !this.lastText) return [{ type: 'run.failed', reason: 'crashed', detail: 'no output' }];
+    // A clean exit after at least one model step is a finished turn, even if it ended on a tool call.
+    if (!this.stopped && !this.lastText && !this.steps) return [{ type: 'run.failed', reason: 'crashed', detail: 'no output' }];
     return [
       {
         type: 'run.completed',

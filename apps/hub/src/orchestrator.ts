@@ -328,7 +328,7 @@ export class Orchestrator {
       const branch = branchName(agent, 'feature', task.id, task.title);
       // A task that depends on unmerged work starts from that work's branch (stacked PRs).
       const dep = task.dependsOn.map((id) => this.state.tasks.get(id)).find((d) => d && d.status === 'awaiting_merge' && d.branch);
-      const base = dep?.branch ?? project.baseBranch;
+      const base = dep?.branch ?? (await this.baseRef(host, project.path, project.baseBranch));
       const worktree = await host.createWorktree({
         repo: project.path,
         worktreesRoot: worktreesRoot(this.config.dataDir, project.id),
@@ -363,6 +363,7 @@ export class Orchestrator {
           projectName: project.name ?? project.id,
           answers: [...this.state.questions.values()].filter((q) => q.taskId === task.id && q.status === 'answered'),
           lessons: readLessons(project.path),
+          canCommit: adapter.canCommit !== false,
           ...(workflow.template && {
             workflow: renderTemplate(workflow.template, {
               'task.title': task.title,
@@ -719,6 +720,10 @@ export class Orchestrator {
       const cwd = task.worktree!;
       const fixRounds = task.runIds.filter((id) => ['fix', 'browser_fix'].includes(this.state.runs.get(id)?.mode ?? '')).length;
 
+      if (this.deps.pool.profile(task.agent!) && this.deps.pool.adapter(task.agent!).canCommit === false && task.completion) {
+        const c = task.completion;
+        await host.commitAll(cwd, `${task.id}: ${c.summary.split('\n')[0]!.slice(0, 72)}\n\n${c.summary}\n\nCommitted by Hyde Code for ${task.agent} (its sandbox keeps .git read-only).`);
+      }
       if (!opts.fromReview) {
         const results = [];
         for (const command of project.checks) results.push(await host.run(cwd, command, this.config.checkTimeoutMinutes * 60_000));
@@ -764,7 +769,7 @@ export class Orchestrator {
           const last = task.reviews.at(-1);
           const reviewedThisRound = last && last.seq > (task.completion?.seq ?? 0);
           if (!reviewedThisRound && reviews < this.config.review.rounds) {
-            const diff = await host.diff(cwd, task.baseBranch!);
+            const diff = await host.diff(cwd, await this.baseRef(host, project.path, task.baseBranch!));
             this.busy.delete(taskId);
             const started = await this.dispatch(task, 'review', {
               author: task.agent!,
@@ -815,7 +820,11 @@ export class Orchestrator {
   private async finishVerify(task: TaskView, project: ProjectConfig, host: HostOps): Promise<void> {
     const cwd = task.worktree!;
     const c = task.completion!;
-    const leftovers = await host.commitAll(cwd, `${task.id}: commit changes the agent left uncommitted`);
+    const harnessCommits = this.deps.pool.profile(task.agent!) ? this.deps.pool.adapter(task.agent!).canCommit === false : false;
+    const leftovers = await host.commitAll(
+      cwd,
+      harnessCommits ? `${task.id}: ${c.summary.split('\n')[0]!.slice(0, 72)}\n\n${c.summary}\n\nCommitted by Hyde Code for ${task.agent} (its sandbox keeps .git read-only).` : `${task.id}: commit changes the agent left uncommitted`,
+    );
 
     // Approved lessons go into this branch's CLAUDE.md and AGENTS.md.
     const lessons = [...this.state.lessons.values()].filter(
@@ -837,7 +846,8 @@ export class Orchestrator {
       }
     }
 
-    const files = await host.changedFiles(cwd, task.baseBranch!);
+    const base = await this.baseRef(host, project.path, task.baseBranch!);
+    const files = await host.changedFiles(cwd, base);
     const review = task.reviews.at(-1);
     const progress = await host.readFile(join(cwd, 'progress.md'));
     if (progress !== null && !hasProgressEntry(progress, task.id)) {
@@ -856,14 +866,14 @@ export class Orchestrator {
         ...(task.browser?.ok ? [`browser check of ${task.browser.url} passed`] : []),
         ...(review ? [`reviewed by ${review.reviewer}: ${review.verdict}`] : []),
       ].join('; '),
-      followUps: [c.followUps, leftovers ? 'harness committed changes the agent left uncommitted' : '', review && review.verdict === 'changes' ? `open review findings: ${review.findings.map((f) => f.text).join('; ')}` : '']
+      followUps: [c.followUps, leftovers && !harnessCommits ? 'harness committed changes the agent left uncommitted' : '', review && review.verdict === 'changes' ? `open review findings: ${review.findings.map((f) => f.text).join('; ')}` : '']
         .filter(Boolean)
         .join('; '),
       }));
       await host.commitAll(cwd, `${task.id}: progress.md entry\n\nWritten by the Hyde Code harness from the agent's report.`);
     }
 
-    if ((await host.commitsAhead(cwd, task.baseBranch!)) === 0) {
+    if ((await host.commitsAhead(cwd, base)) === 0) {
       await this.fail(task, `${task.id}: agent reported done but made no commits`, c.summary);
       return;
     }
@@ -1517,6 +1527,23 @@ export class Orchestrator {
     } catch (err) {
       this.log(`notify failed for ${task.id}: ${(err as Error).message}`);
     }
+  }
+
+  private fetched = new Map<string, number>();
+
+  /**
+   * The ref task branches start from and are compared against: origin/<base> (fetched at most
+   * once a minute) when the repo has a remote, so a stale local base branch can't leak in.
+   */
+  private async baseRef(host: HostOps, repo: string, base: string): Promise<string> {
+    if (!(await host.hasRemote(repo))) return base;
+    const key = `${repo}:${base}`;
+    if (this.now() - (this.fetched.get(key) ?? 0) > 60_000) {
+      const r = await host.run(repo, `git fetch --quiet origin ${JSON.stringify(base)}`, 120_000);
+      if (!r.ok) return base;
+      this.fetched.set(key, this.now());
+    }
+    return `origin/${base}`;
   }
 
   project(id: string): ProjectConfig {

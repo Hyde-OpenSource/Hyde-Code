@@ -136,6 +136,8 @@ export class CodexAdapter extends ProcessAdapter {
   readonly kind = 'codex' as const;
   readonly vendor = 'openai' as const;
   readonly structuredOutput = true;
+  // Codex's workspace-write sandbox always keeps .git read-only, even under writable_roots.
+  readonly canCommit = false;
 
   constructor(bin = 'codex', options: { wrap?: LaunchWrapper } = {}) {
     super(bin, options);

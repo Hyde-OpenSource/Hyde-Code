@@ -232,3 +232,27 @@ describe('setup', async () => {
     expect(upsertEnv('A=1\nTELEGRAM_BOT_TOKEN=old\n', { TELEGRAM_BOT_TOKEN: 'new', SLACK_BOT_TOKEN: 'x', EMPTY: '' })).toBe('A=1\nTELEGRAM_BOT_TOKEN=new\nSLACK_BOT_TOKEN=x\n');
   });
 });
+
+describe('structured output schemas (regression: OpenAI strict mode rejected the plan schema)', async () => {
+  const { PLAN_SCHEMA } = await import('./planner.ts');
+  const { REVIEW_SCHEMA } = await import('./review.ts');
+  function strict(schema: any, path = 'schema'): string[] {
+    const errs: string[] = [];
+    if (schema?.type === 'object' || (Array.isArray(schema?.type) && schema.type.includes('object'))) {
+      const keys = Object.keys(schema.properties ?? {});
+      const missing = keys.filter((k) => !(schema.required ?? []).includes(k));
+      if (missing.length) errs.push(`${path}: not required: ${missing.join(', ')}`);
+      if (schema.additionalProperties !== false) errs.push(`${path}: additionalProperties must be false`);
+      for (const k of keys) errs.push(...strict(schema.properties[k], `${path}.${k}`));
+    }
+    if (schema?.items) errs.push(...strict(schema.items, `${path}[]`));
+    return errs;
+  }
+  it('every object requires all its properties', () => {
+    expect(strict(PLAN_SCHEMA)).toEqual([]);
+    expect(strict(REVIEW_SCHEMA)).toEqual([]);
+  });
+  it('accepts null file and line in findings', () => {
+    expect(parseReview({ verdict: 'approve', summary: '', findings: [{ severity: 'low', file: null, line: null, text: 'x' }] })!.findings).toEqual([{ severity: 'low', text: 'x' }]);
+  });
+});

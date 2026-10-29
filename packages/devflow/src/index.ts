@@ -17,6 +17,8 @@ export interface PacketInput {
   projectName: string;
   answers: QuestionView[];
   lessons: string[];
+  /** False when the agent's sandbox can't write .git; the harness commits for it. */
+  canCommit?: boolean;
   /** Rendered WORKFLOW.md body from the repo, if any. */
   workflow?: string;
 }
@@ -43,7 +45,9 @@ export function buildTaskPacket(input: PacketInput): string {
     '- Work only in this worktree and on this branch. Never push, merge, rebase or switch branches; the harness pushes after the owner approves.',
     '- Never assume. If something is unclear, call the `ask_question` tool. Blocking question: call it, then end your turn; you will be resumed with the answer.',
     '- Read the related code before editing. Follow the project conventions. Small, focused changes.',
-    '- Verify your change (run the tests or the code). Commit in small logical steps with messages that say what and why.',
+    input.canCommit === false
+      ? '- Verify your change (run the tests or the code). Do NOT run git add or git commit (your sandbox keeps .git read-only); leave the changes in the worktree and the harness commits them with your complete_task summary.'
+      : '- Verify your change (run the tests or the code). Commit in small logical steps with messages that say what and why.',
     '- Do not edit progress.md, tasks.md or agents.md; the harness writes them from your report.',
     '- Remove any temporary files you create.',
     '- When done, call `complete_task` with a summary, how you verified it, and the files you changed.',

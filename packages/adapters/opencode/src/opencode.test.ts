@@ -26,6 +26,12 @@ describe('OpenCodeParser (recorded opencode 1.19.0 stream)', () => {
     expect(new OpenCodeParser('m', false).finish({ code: null, signal: 'SIGINT' }, true)).toEqual([{ type: 'run.failed', reason: 'cancelled' }]);
   });
 
+  it('treats a clean exit after a tool-only step as a finished turn (regression: false "no output" crashes)', () => {
+    const p = new OpenCodeParser('m', false);
+    p.parseLine(JSON.stringify({ type: 'step_finish', sessionID: 's', part: { reason: 'tool-calls', tokens: {} } }));
+    expect(p.finish({ code: 0, signal: null }, false)).toEqual([{ type: 'run.completed', summary: '' }]);
+  });
+
   it('parses structured answers', () => {
     const p = new OpenCodeParser('m', true);
     p.parseLine(JSON.stringify({ type: 'text', sessionID: 's', part: { text: '```json\n{"verdict":"approve"}\n```' } }));

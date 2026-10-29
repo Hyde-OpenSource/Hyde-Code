@@ -17,11 +17,11 @@ export const REVIEW_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['severity', 'text'],
+        required: ['severity', 'file', 'line', 'text'],
         properties: {
           severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
-          file: { type: 'string' },
-          line: { type: 'integer' },
+          file: { type: ['string', 'null'] },
+          line: { type: ['integer', 'null'] },
           text: { type: 'string' },
         },
       },
@@ -36,8 +36,8 @@ const reviewSchema = z.object({
     .array(
       z.object({
         severity: z.enum(['critical', 'high', 'medium', 'low']),
-        file: z.string().optional(),
-        line: z.number().int().optional(),
+        file: z.string().nullish().transform((v) => v || undefined),
+        line: z.number().int().nullish().transform((v) => v ?? undefined),
         text: z.string(),
       }),
     )
