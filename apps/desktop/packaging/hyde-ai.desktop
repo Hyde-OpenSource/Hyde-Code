@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Hyde AI
+GenericName=Desktop Assistant
+Comment=Control your desktop and your coding agents in plain words
+Exec=@BIN@
+Icon=hyde-ai
+Terminal=false
+Categories=Utility;Development;
+Keywords=assistant;ai;voice;commands;opencode;omniroute;hyde;code;agents;
+StartupNotify=true

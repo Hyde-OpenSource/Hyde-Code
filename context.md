@@ -4,7 +4,7 @@
 > Created: 2026-10-27
 
 ## 1. What this project is
-- **Name:** Hyde Code (the plan's working name was "DevFlow Harness"; the owner chose Hyde Code on 2026-10-27)
+- **Name:** Hyde AI (since 2026-10-30: the Hyde Code hub and the Hyde AI desktop assistant merged into one repo). The hub keeps the name Hyde Code (the plan's working name was "DevFlow Harness"; the owner chose Hyde Code on 2026-10-27).
 - **Purpose / problem it solves:** A self-hosted control plane that drives the official agent CLIs (Claude Code first, Codex next) and owns tasks, worktrees, approvals, chat, UI and memory. "Send a task, get a reviewed PR back." The full plan is in `docs/plan.md`.
 - **Who uses it:** The owner only. **Personal tool** (decided 2026-10-27), so it runs the owner's own signed-in CLIs on the owner's own machine.
 - **Client / owner:** Tirth (GitHub `Tirth1107`), GamifyIAS Management.
@@ -93,3 +93,11 @@
 
 ## 11. Open questions for the user
 - Telegram bot token and the owner's Telegram user id (or use `/pair`).
+
+## 13. Hyde AI desktop assistant (merged 2026-10-30)
+- **Where:** `apps/desktop`, its own Cargo workspace: `crates/hyde-core` (deterministic matcher, no deps), `crates/hyde-pack` (TOML → pack), `crates/hyde-ai` (binary `hyde-ai`: tiny_http UI on 127.0.0.1:7878, ureq AI client, executor, tool installer, Hyde Code bridge `src/hydecode.rs`). Built-in commands in `apps/desktop/data/` (embedded at build time). UI is plain HTML/CSS/JS in `crates/hyde-ai/ui`.
+- **Origin:** built 2026-10-29 as "Hyde Agent" in `E:/PROJECTS 2/Hyde Agent` (no git history there), copied in on branch `feature/hyde-ai`.
+- **Bridge:** reads `~/.hyde/config.json` + `<dataDir>/owner-token`, calls `/api/health`, `/api/state`, `/api/commands`, `/login`; starts the hub with `hyde hub start`. Contract and roadmap: `docs/HYDE_AI.md`.
+- **Commands:** `hyde ai` (window), `hyde ai doctor|run|install`, `pnpm desktop`, `pnpm desktop:test`, `pnpm desktop:lint`, `pnpm desktop:install`; `./scripts/install.sh` installs both parts.
+- **Config:** `~/.config/hyde-ai/config.toml` (0600: AI provider, key, default Hyde Code project), extra intents in `~/.config/hyde-ai/intents/`.
+- **Toolchain:** Rust stable via rustup in the owner's home (`source ~/.cargo/env`).

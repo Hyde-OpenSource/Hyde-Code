@@ -1,0 +1,74 @@
+# App catalogue. `command` is an executable name or absolute path; it is never run through a shell.
+# Override this file per user at ~/.config/hyde-ai/apps.toml.
+
+[[app]]
+id = "chrome"
+name = "Google Chrome"
+aliases = ["chrome", "google chrome", "browser"]
+command = "google-chrome"
+
+[[app]]
+id = "firefox"
+name = "Firefox"
+aliases = ["firefox", "mozilla"]
+command = "firefox"
+
+[[app]]
+id = "vscode"
+name = "Visual Studio Code"
+aliases = ["vs code", "vscode", "code", "editor"]
+command = "code"
+
+[[app]]
+id = "spotify"
+name = "Spotify"
+aliases = ["spotify", "music"]
+command = "spotify"
+
+[[app]]
+id = "terminal"
+name = "Terminal"
+aliases = ["terminal", "konsole", "console", "shell"]
+command = "konsole"
+
+[[app]]
+id = "files"
+name = "Files"
+aliases = ["files", "file manager", "dolphin", "explorer"]
+command = "dolphin"
+
+[[app]]
+id = "settings"
+name = "System Settings"
+aliases = ["settings", "system settings"]
+command = "systemsettings"
+
+[[app]]
+id = "calculator"
+name = "Calculator"
+aliases = ["calculator", "calc"]
+command = "kcalc"
+
+[[app]]
+id = "discord"
+name = "Discord"
+aliases = ["discord"]
+command = "discord"
+
+[[app]]
+id = "telegram"
+name = "Telegram"
+aliases = ["telegram"]
+command = "telegram-desktop"
+
+[[app]]
+id = "vlc"
+name = "VLC"
+aliases = ["vlc", "video player"]
+command = "vlc"
+
+[[app]]
+id = "obs"
+name = "OBS Studio"
+aliases = ["obs", "obs studio", "recorder"]
+command = "obs"

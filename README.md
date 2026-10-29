@@ -1,4 +1,60 @@
-# Hyde Code
+# Hyde AI
+
+Your own AI team on your own computer. Tell it what you want, by voice or text, and Hyde AI either
+does it on the desktop or hands it to your coding agents and brings back a reviewed pull request.
+
+Hyde AI is one project with two parts that work together:
+
+| | **Hyde Code** — `hyde` | **Hyde AI desktop** — `hyde ai` / `hyde-ai` |
+|---|---|---|
+| What | Control plane for the official agent CLIs (Claude Code, Codex, OpenCode, any ACP agent) | Voice and desktop assistant |
+| Does | Tasks, worktrees, planning, review, approvals, PRs, merges, chat apps, the office | Apps, volume, web, free AI engine (OmniRoute, OpenRouter, Groq, Gemini, Ollama), installs OpenCode/OmniRoute, **assigns and follows Hyde Code tasks** |
+| Code | `apps/hub`, `apps/web`, `apps/node`, `packages/*` (TypeScript, Node 24) | `apps/desktop` (Rust, one 2.7 MB binary) |
+| UI | Office at `127.0.0.1:7420`, terminal UI, Telegram/Slack/Discord | App window at `127.0.0.1:7878` |
+
+```
+you ── voice / text ──▶ Hyde AI desktop ──▶ desktop action (open apps, volume, web, installs)
+                              │
+                              └─ "hyde code add a dark mode toggle in my-site using codex"
+                                          ▼
+                     Hyde Code hub ─▶ plan ─▶ agent in a worktree ─▶ checks ─▶ review ─▶ PR
+                                          │
+                questions and approvals come back to the desktop app, the office and chat
+```
+
+How the two talk to each other, which commands to use and the roadmap: [docs/HYDE_AI.md](docs/HYDE_AI.md).
+
+## Install everything
+
+Requirements: Node.js 24+, git, Rust ([rustup.rs](https://rustup.rs)), `gh` (signed in) for PRs, and at
+least one agent CLI signed in (Claude Code, Codex, OpenCode, …).
+
+```bash
+git clone https://github.com/Hyde-OpenSource/Hyde-Code.git hyde-ai && cd hyde-ai
+./scripts/install.sh   # pnpm install + office build + `hyde` CLI + `hyde-ai` desktop app
+```
+
+Then: `hyde` inside a project folder (trust it, start the hub, open the office), and `hyde ai`
+(or **Hyde AI** in the app menu) for the assistant. Say *“hyde code add a footer in this project”*
+or *“what is waiting for me”*.
+
+## The desktop assistant (`apps/desktop`)
+
+| Tab | What |
+|---|---|
+| **Assistant** | Type or speak. Desktop commands run instantly (L0) or after a confirm (L2+); `and` runs steps together, `then` in order. |
+| **Hyde Code** | Assign a task (project, agent, default ★), answer agent questions, approve pushes, merge, stop, retry, open the office. |
+| **AI tools** | One-click OpenCode and OmniRoute installs with a live log; start them. |
+| **Apps** · **AI engine** | Known apps; pick a free model provider, paste a key, load models, test. |
+
+`hyde ai doctor` checks the machine, the hub and the AI engine. `hyde ai run <request>` runs one
+request from the terminal. Desktop settings live in `~/.config/hyde-ai/`. Hyde Code's live in `~/.hyde/`.
+The AI engine only answers or rewrites into Hyde AI's own commands, which the rules engine checks
+again, so a model can never run anything that isn't defined. Details: [apps/desktop/README.md](apps/desktop/README.md).
+
+---
+
+# Hyde Code (the hub)
 
 A self-hosted control plane that drives the official agent CLIs you already pay for (Claude Code,
 Codex, OpenCode and any ACP agent such as Gemini CLI) and owns everything around them: tasks,
@@ -14,7 +70,7 @@ Hyde Code launches each vendor's unmodified CLI, signed in by its owner, on that
 It never reads, copies or stores CLI credentials, never uses `claude --bare`, and starts every agent
 with an allowlisted environment (no `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or chat tokens).
 
-## Install
+## Install Hyde Code only
 
 Requirements: Node.js 24+, git, `gh` (signed in) for PRs, and at least one agent CLI signed in
 (Claude Code, Codex, OpenCode, …).
@@ -130,8 +186,12 @@ accept `hyde new …` and `!new …`.
 ## Development
 
 ```bash
-pnpm test        # vitest
-pnpm typecheck   # tsc (hub, packages, web)
+pnpm test            # vitest (hub, packages, web)
+pnpm typecheck       # tsc
+pnpm desktop:test    # cargo test (apps/desktop)
+pnpm desktop:lint    # clippy -D warnings + rustfmt
+pnpm desktop -- ui   # run the desktop app from source
+pnpm test:all        # everything
 ```
 
 | Path | Contents |
@@ -139,6 +199,7 @@ pnpm typecheck   # tsc (hub, packages, web)
 | `apps/hub` | Config, orchestrator, router, planner, review, policy, merge queue, notifier, API, CLI, setup, terminal UI (`tui*.ts`) |
 | `apps/web` | Web dashboard: the office (`src/md`, ported from Munder Difflin), Board, Inbox, Task, Usage, Audit, Settings |
 | `apps/node` | Worker node for teammates' machines |
+| `apps/desktop` | Hyde AI desktop assistant (Rust workspace: `hyde-core` matcher, `hyde-pack` compiler, `hyde-ai` app and UI) |
 | `packages/core` | Contracts, event schemas, event store, projections, lifecycle, chat commands |
 | `packages/adapters/*` | claude-code, codex, opencode, acp, command, and the shared process base |
 | `packages/gateways/*` | telegram, slack, discord, whatsapp |

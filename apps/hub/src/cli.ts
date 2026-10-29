@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { configPath, loadConfig, persistedSecret, readRawConfig } from './config.ts';
@@ -14,6 +14,7 @@ import { runSetup } from './setup.ts';
 //   hyde web           open the web office          hyde tui      the terminal office
 //   hyde new "…"       a task for this folder       hyde status   what's going on
 //   hyde hub stop|start|restart|status|logs         hyde setup    agents, stages, chat apps
+//   hyde ai            Hyde AI, the desktop assistant (apps/desktop)
 // Anything else is the same slash command the chat bots accept.
 
 const exec = promisify(execFile);
@@ -37,6 +38,7 @@ function help(): void {
   ${c.accent('hyde hub')} stop|start|restart|status|logs
   ${c.accent('hyde setup')}           pick agents, stages and chat apps
   ${c.accent('hyde tiles')} <folder>  add your LimeZu tiles for the office art
+  ${c.accent('hyde ai')}              open Hyde AI, the voice and desktop assistant (\`hyde ai doctor\`, \`hyde ai run …\`)
   answer, approve, deny, merge, retry, stop, promote, usage, agents, logs: same as in chat
 
 Home: ${hydeHome()}   Terms: ${TERMS_URL}`);
@@ -222,6 +224,27 @@ if (!name || name === '.' || (existsSync(resolve(cwd, name)) && statSync(resolve
 if (name === 'help' || name === '--help' || name === '-h') {
   help();
   process.exit(0);
+}
+
+// `hyde ai`: the Hyde AI desktop assistant (apps/desktop, Rust). `hyde ai` opens its window;
+// `hyde ai run …`, `hyde ai doctor`, `hyde ai install …` pass straight through.
+if (name === 'ai') {
+  const repo = resolve(hubDir, '..', '..');
+  const onPath = (process.env.PATH ?? '').split(delimiter).filter(Boolean).map((dir) => join(dir, 'hyde-ai'));
+  const local = ['release', 'debug'].map((profile) => join(repo, 'apps', 'desktop', 'target', profile, 'hyde-ai'));
+  const bin = [...onPath, ...local].find((file) => existsSync(file));
+  if (!bin) {
+    console.log(`Hyde AI isn't built yet. From ${repo} run: ${c.accent('pnpm desktop:install')}`);
+    process.exit(1);
+  }
+  if (rest.length) {
+    const child = spawn(bin, rest, { stdio: 'inherit' });
+    child.on('exit', (code) => process.exit(code ?? 0));
+  } else {
+    spawn(bin, [], { detached: true, stdio: 'ignore' }).unref();
+    console.log('Opening Hyde AI…');
+    process.exit(0);
+  }
 }
 
 if (name === 'setup') {

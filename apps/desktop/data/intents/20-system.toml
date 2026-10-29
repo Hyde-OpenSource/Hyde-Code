@@ -1,0 +1,61 @@
+[[intent]]
+id = "set_volume"
+risk = "L0"
+action = "sys.volume.set"
+response = "Volume set"
+triggers = ["volume", "sound"]
+patterns = [
+  "volume {number} percent",
+  "volume {number}",
+  "volume to {number}",
+  "set volume to {number}",
+  "set volume {number}",
+  "set the volume to {number}",
+  "set sound to {number}",
+]
+
+[[intent]]
+id = "step_volume"
+risk = "L0"
+action = "sys.volume.step"
+response = "Volume changed"
+triggers = ["volume", "louder", "quieter"]
+patterns = [
+  "volume {dir:up|down}",
+  "turn volume {dir:up|down}",
+  "turn the volume {dir:up|down}",
+  "turn {dir:up|down} the volume",
+  "turn {dir:up|down} volume",
+  "{dir:louder|quieter}",
+]
+
+[[intent]]
+id = "mute"
+risk = "L0"
+action = "sys.mute"
+response = "Done"
+triggers = ["mute", "unmute"]
+patterns = ["{state:mute|unmute}", "{state:mute|unmute} the sound", "{state:mute|unmute} sound"]
+
+[[intent]]
+id = "lock_screen"
+risk = "L1"
+action = "sys.lock"
+response = "Locking the screen"
+triggers = ["lock"]
+patterns = ["lock", "lock screen", "lock the screen", "lock my screen", "lock computer", "lock the computer"]
+
+[[intent]]
+id = "tell_time"
+risk = "L0"
+action = "sys.time"
+triggers = ["time", "date", "day"]
+patterns = [
+  "what time is it",
+  "what is the time",
+  "time",
+  "what is the date",
+  "what is today s date",
+  "what day is it",
+  "date",
+]

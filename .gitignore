@@ -10,3 +10,5 @@ dist/
 *.pdf
 *.docx
 hyde.config.json
+# Rust build output for apps/desktop (Hyde AI)
+target/

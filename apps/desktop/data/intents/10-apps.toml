@@ -1,0 +1,26 @@
+# Pattern syntax: literals, {slot}, {list+} (one or more apps), {rest*} (remaining words),
+# {name:a|b} (one of the listed words), [optional]. `{trigger}` matches one of the triggers.
+
+[[intent]]
+id = "open_app"
+risk = "L0"
+parallel = true
+action = "app.open"
+response = "Opening"
+triggers = ["open", "launch", "start", "run", "fire up"]
+patterns = [
+  "{trigger} {app+}",
+  "{trigger} up {app+}",
+  "{app} {trigger}",
+]
+
+[[intent]]
+id = "close_app"
+risk = "L1"
+action = "app.close"
+response = "Closing"
+triggers = ["close", "quit", "exit", "kill"]
+patterns = [
+  "{trigger} {it}",
+  "{trigger} {app}",
+]

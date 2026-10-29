@@ -6,6 +6,15 @@
 ## How to write an entry
 
 ```markdown
+### 2026-10-30: Merge the Hyde AI desktop assistant into this repo as one project
+- **Agent:** hyde-agent-25 (Claude Opus 5.5, claude-opus-5-5), working in a separate worktree so the hyde-code session's checkout was untouched
+- **Branch:** feature/hyde-ai (from feature/md-office a915f97)
+- **What:** Moved the Rust desktop assistant (formerly "Hyde Agent", E:/PROJECTS 2/Hyde Agent) into `apps/desktop` and renamed its crate and binary to `hyde-ai`. Added `hyde ai` to the hub CLI (opens the app or passes `doctor`/`run`/`install` through), `pnpm desktop*`, `test:all`, `setup:all` scripts, a root `scripts/install.sh` that installs both parts, and a CI workflow (hub typecheck/test/build plus desktop fmt/clippy/test/release build). Rewrote the README as Hyde AI and added `docs/HYDE_AI.md` (how the parts work together, the hub contract the desktop app relies on, the roadmap).
+- **Why:** Owner asked to combine Hyde Code and Hyde Agent into a single, properly set up project named Hyde AI.
+- **Files:** apps/desktop/**, apps/hub/src/cli.ts, package.json, .gitignore, scripts/install.sh, .github/workflows/ci.yml, README.md, docs/HYDE_AI.md, CLAUDE.md, context.md, progress.md
+- **Verified:** `pnpm typecheck` clean, `pnpm test` 134/134, `pnpm desktop:test` 16/16, clippy `-D warnings` and rustfmt clean. `hyde ai doctor` and `hyde ai run help` pass through, and with `hyde-ai` missing it prints the build hint. The desktop ↔ hub bridge was exercised against a mock hub (`/new … #project @agent`, `/approve`, `/answer`, status summary); no run on the real hub, to save agent quota.
+- **Open / follow-ups:** Not pushed; owner to review and merge `feature/hyde-ai` into staging. The GitHub repo is still named Hyde-Code (rename later if wanted). The old `E:/PROJECTS 2/Hyde Agent` folder still exists; delete it once this branch is merged. Roadmap P0 items in docs/HYDE_AI.md §4.
+
 ### YYYY-MM-DD: <short title>
 - **Agent:** <name> (<model>)
 - **Branch:** <branch>

@@ -1,0 +1,25 @@
+# Developer AI tools Hyde can install and launch.
+
+[[intent]]
+id = "install_tool"
+risk = "L2"
+action = "tool.install"
+response = "Installing"
+triggers = ["install", "setup", "set up", "get"]
+patterns = [
+  "install {tool:opencode|omniroute}",
+  "setup {tool:opencode|omniroute}",
+  "set up {tool:opencode|omniroute}",
+  "get {tool:opencode|omniroute}",
+]
+
+[[intent]]
+id = "launch_tool"
+risk = "L0"
+action = "tool.launch"
+response = "Starting"
+triggers = ["open", "launch", "start", "run"]
+patterns = [
+  "{trigger} {tool:opencode|omniroute}",
+  "{trigger} {tool:opencode|omniroute} dashboard",
+]

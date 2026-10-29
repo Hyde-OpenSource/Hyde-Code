@@ -1,5 +1,5 @@
 {
-  "name": "hyde-code",
+  "name": "hyde-ai",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.15.0",
@@ -14,7 +14,13 @@
     "test:watch": "vitest",
     "hyde": "pnpm --silent --filter @hyde/hub cli",
     "build": "pnpm --filter @hyde/web build",
-    "install-cli": "node scripts/install-cli.mjs"
+    "install-cli": "node scripts/install-cli.mjs",
+    "desktop": "cargo run --manifest-path apps/desktop/Cargo.toml -p hyde-ai --",
+    "desktop:test": "cargo test --manifest-path apps/desktop/Cargo.toml",
+    "desktop:lint": "cargo clippy --manifest-path apps/desktop/Cargo.toml --all-targets -- -D warnings && cargo fmt --manifest-path apps/desktop/Cargo.toml --all --check",
+    "desktop:install": "bash apps/desktop/scripts/install.sh",
+    "test:all": "pnpm test && pnpm desktop:test",
+    "setup:all": "bash scripts/install.sh"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
