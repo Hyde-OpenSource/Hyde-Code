@@ -27,5 +27,11 @@ Short version of the rules:
 - 2026-10-27: Verify agent-facing changes with a real `claude -p` run on a scratch repo; unit tests with fakes missed the broken MCP server launch.
 - 2026-10-27: `pkill -f <pattern>` can match your own shell command. Find PIDs with an anchored `pgrep -f` and kill those.
 - 2026-10-27: Pick dependency versions at least two weeks old and pin them exactly.
+- 2026-10-29: Codex's workspace-write sandbox keeps .git read-only even with writable_roots; the harness commits for it.
+- 2026-10-29: OpenAI structured outputs need strict schemas: every property required, additionalProperties false, use null for "absent".
+- 2026-10-29: Cut and diff task branches against a fetched origin/<base>; local base branches go stale when PRs merge on GitHub.
+- 2026-10-29: Watch quota before real test runs; the owner's Claude 5-hour window hit 99% during testing.
+- 2026-10-29: Never name a scratch script after a stdlib module (pty.py shadowed `pty`); run scratch Python with -I.
+- 2026-10-29: Check UI work with real screenshots (Playwright) at desktop and phone widths; overlapping name tags and an overflowing board only showed up there.
 
 <!-- devflow:end -->

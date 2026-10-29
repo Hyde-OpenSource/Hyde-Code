@@ -9,10 +9,11 @@
   "scripts": {
     "dev": "pnpm --filter @hyde/hub dev",
     "start": "pnpm --filter @hyde/hub start",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "hyde": "pnpm --silent --filter @hyde/hub cli"
+    "hyde": "pnpm --silent --filter @hyde/hub cli",
+    "build": "pnpm --filter @hyde/web build"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

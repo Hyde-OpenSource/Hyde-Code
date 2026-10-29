@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a18426-7a48-7ee2-aea3-5bf4b5aea83f"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll find the Hyde `report_progress` tool and call it with `probe`."}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"hyde","tool":"report_progress","arguments":{"message":"probe"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"hyde","tool":"report_progress","arguments":{"message":"probe"},"result":{"content":[{"type":"text","text":"Harness unavailable: fetch failed"}],"structured_content":null},"error":null,"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"It returned: `Harness unavailable: fetch failed` (`isError: true`)."}}
+{"type":"turn.completed","usage":{"input_tokens":44434,"cached_input_tokens":39040,"cache_write_input_tokens":0,"output_tokens":107,"reasoning_output_tokens":0}}

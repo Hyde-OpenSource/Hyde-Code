@@ -116,3 +116,5 @@ export async function installPrePushHook(repo: string, script: string, marker: s
   chmodSync(path, 0o755);
   return 'installed';
 }
+
+export { LocalHost, type CommandResult, type HostOps, type PullRequest } from './host.ts';
