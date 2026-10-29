@@ -226,6 +226,7 @@ function Kanban({ state }: { state: HubState }) {
                 <span className="md-card-title">{t.title}</span>
                 <span className="md-card-meta">
                   {t.agent ?? 'unassigned'} · {t.status.replace('_', ' ')}
+                  {t.source.kind === 'hyde-ai' && ' · via Hyde AI'}
                 </span>
               </a>
             ))}

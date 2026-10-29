@@ -39,6 +39,7 @@ export function Board({ scoped: state }: PageProps) {
                     {t.status === 'blocked' && <span className="badge warn">blocked {t.blockedBy?.id ?? ''}</span>}
                     {t.status === 'failed' && <span className="badge bad">failed</span>}
                     {t.kind === 'client' && <span className="badge accent">client</span>}
+                    {t.source.kind === 'hyde-ai' && <span className="badge accent">Hyde AI</span>}
                   </div>
                   <div>{t.title}</div>
                   <div className="meta">

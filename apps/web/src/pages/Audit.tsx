@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { sourceLabel } from '@hyde/core/office';
 import { api } from '../api.ts';
 import type { PageProps } from '../ui.tsx';
 
@@ -9,7 +10,7 @@ export function Audit({ state }: PageProps) {
   useEffect(() => {
     api.audit().then(setRows, () => undefined);
   }, [state.lastSeq]);
-  const shown = rows.filter((r) => !filter || `${r.type} ${r.actor.id} ${r.taskId ?? ''}`.toLowerCase().includes(filter.toLowerCase())).reverse();
+  const shown = rows.filter((r) => !filter || `${r.type} ${r.actor.id} ${r.taskId ?? ''} ${r.source ?? ''}`.toLowerCase().includes(filter.toLowerCase())).reverse();
   return (
     <>
       <h1>Audit</h1>
@@ -35,6 +36,7 @@ export function Audit({ state }: PageProps) {
                 <td className="mono">{r.type}</td>
                 <td>
                   <span className={`badge ${r.actor.kind === 'user' ? 'accent' : r.actor.kind === 'agent' ? 'ok' : ''}`}>{r.actor.kind}</span> {r.actor.id}
+                  {r.source && <span className="meta"> · from {sourceLabel(r.source)}</span>}
                 </td>
                 <td>{r.taskId && <a href={`#task/${r.taskId}`}>{r.taskId}</a>}</td>
               </tr>

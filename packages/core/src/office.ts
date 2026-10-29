@@ -52,6 +52,24 @@ export function agentActivity(state: State, agent: OfficeAgent): AgentActivity {
   return { ...base, mood: 'idle', spot: 'coffee', line: 'Free for work' };
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  telegram: 'Telegram',
+  slack: 'Slack',
+  discord: 'Discord',
+  whatsapp: 'WhatsApp',
+  web: 'web',
+  cli: 'terminal',
+  api: 'API',
+  schedule: 'schedule',
+  planner: 'planner',
+  'hyde-ai': 'Hyde AI',
+};
+
+/** Where a task came from, in words: "Hyde AI", "Telegram", "terminal". */
+export function sourceLabel(kind: string): string {
+  return SOURCE_LABELS[kind] ?? kind;
+}
+
 /** Open questions, approvals and lessons whose task is still in play. */
 export function openItems(state: State) {
   const live = (taskId: string | undefined) => !taskId || !TERMINAL.includes(state.tasks.find((t) => t.id === taskId)?.status ?? 'done');

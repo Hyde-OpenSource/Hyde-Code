@@ -46,7 +46,8 @@ const harnessEvent = z.discriminatedUnion('type', [
   }),
 ]);
 
-export const SOURCE_KINDS = ['telegram', 'slack', 'discord', 'whatsapp', 'web', 'cli', 'api', 'schedule', 'planner'] as const;
+/** Where a task came from. `hyde-ai` is the Hyde AI desktop assistant (voice and text). */
+export const SOURCE_KINDS = ['telegram', 'slack', 'discord', 'whatsapp', 'web', 'cli', 'api', 'schedule', 'planner', 'hyde-ai'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 const source = z.object({ kind: z.enum(SOURCE_KINDS), chatId: z.string().optional() });
 
