@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 //   ~/.hyde/trust.json    trusted folders and the accepted terms version
 //   ~/.hyde/data/         event store, worktrees, owner token
 //   ~/.hyde/hub.log       output of the background hub
+//   ~/.hyde/hub.json      where the running hub listens ({url, pid, version, apiVersion}); gone when it stops
 
 export const TERMS_VERSION = '2026-10-29';
 export const TERMS_URL = 'https://github.com/Hyde-OpenSource/Hyde-Code/blob/main/TERMS.md';
@@ -26,6 +27,7 @@ export function homePaths(home = hydeHome()) {
     trust: join(home, 'trust.json'),
     log: join(home, 'hub.log'),
     pid: join(home, 'hub.pid'),
+    hub: join(home, 'hub.json'),
   };
 }
 
@@ -84,4 +86,34 @@ export function untrustFolder(folder: string, home = hydeHome()): void {
   const t = readTrust(home);
   delete t.folders[resolve(folder)];
   writeTrust(t, home);
+}
+
+/** What a running hub tells clients (Hyde AI, scripts) about itself in ~/.hyde/hub.json. */
+export interface HubInfo {
+  url: string;
+  pid: number;
+  version: string;
+  apiVersion: number;
+  dataDir: string;
+  startedAt: string;
+}
+
+export function writeHubInfo(info: HubInfo, home = hydeHome()): void {
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  const file = homePaths(home).hub;
+  writeFileSync(`${file}.tmp`, JSON.stringify(info, null, 2) + '\n', { mode: 0o644 });
+  renameSync(`${file}.tmp`, file);
+}
+
+/** The running hub's info, or null when there is none (no file, unreadable, or its process is gone). */
+export function readHubInfo(home = hydeHome()): HubInfo | null {
+  const file = homePaths(home).hub;
+  if (!existsSync(file)) return null;
+  try {
+    const info = JSON.parse(readFileSync(file, 'utf8')) as HubInfo;
+    process.kill(info.pid, 0);
+    return info;
+  } catch {
+    return null;
+  }
 }

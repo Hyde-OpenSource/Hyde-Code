@@ -23,7 +23,10 @@
 | Agent name | Model | Type | Role | Status | Branch | Last seen |
 |---|---|---|---|---|---|---|
 | main | Claude Opus 5.5 (claude-opus-5-5) | main | main agent | online | feature/phase0-core | 2026-10-27 |
+| agent-hydeai-api | Claude Opus 5.5 (claude-opus-5-5) | child | hub client API for Hyde AI | offline | agent-hydeai-api/feature/hyde-ai-api | 2026-10-30 |
 
 ## Log
 <!-- - YYYY-MM-DD HH:MM: <agent>: <message> (e.g. "online", "took T-003", "offline") -->
 - 2026-10-27 01:10: main: online, set up workspace, building Phase 0 on feature/phase0-core
+- 2026-10-30 00:05: agent-hydeai-api: online, building the Hyde AI client API (owner chose P0-P2) on agent-hydeai-api/feature/hyde-ai-api
+- 2026-10-30 00:40: agent-hydeai-api: offline, work committed on its branch (not pushed), waiting for the owner's review

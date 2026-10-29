@@ -12,13 +12,15 @@ import { installPrePushHook, LocalHost } from '@hyde/workspace';
 import { AgentPool, defaultAdapters } from './agents.ts';
 import { loadConfig, persistedSecret, type HubConfig } from './config.ts';
 import { detectAll } from './detect.ts';
-import { homePaths, loadHomeEnv } from './home.ts';
+import { loadClientTokens } from './clients.ts';
+import { homePaths, loadHomeEnv, writeHubInfo } from './home.ts';
 import { createApi } from './http.ts';
 import { NodeHub } from './nodes.ts';
 import { Notifier } from './notifier.ts';
 import { Orchestrator } from './orchestrator.ts';
 import { loadPlugins } from './plugins.ts';
 import { startSchedules } from './schedules.ts';
+import { API_VERSION, HUB_VERSION } from './version.ts';
 
 const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`);
 const hydeRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -132,6 +134,7 @@ const app = createApi({
   pool,
   host,
   ownerToken,
+  clientTokens: loadClientTokens(config.dataDir),
   detect: detectAll,
   ...(whatsapp && { whatsapp }),
   webDir: join(hydeRoot, 'apps', 'web', 'dist'),
@@ -150,6 +153,9 @@ nodeHub?.attach(server as never);
 log(`hub API and dashboard on ${hubUrl} (run \`hyde web\` to open it)`);
 const pidFile = homePaths().pid;
 writeFileSync(pidFile, String(process.pid));
+// Clients (Hyde AI, scripts) find the running hub here instead of re-reading config.
+const hubFile = homePaths().hub;
+writeHubInfo({ url: hubUrl, pid: process.pid, version: HUB_VERSION, apiVersion: API_VERSION, dataDir: config.dataDir, startedAt: new Date().toISOString() });
 
 for (const [name, gateway] of gateways) {
   try {
@@ -179,6 +185,7 @@ async function shutdown() {
   server.close();
   store.close();
   rmSync(pidFile, { force: true });
+  rmSync(hubFile, { force: true });
   process.exit(0);
 }
 process.on('SIGINT', shutdown);
