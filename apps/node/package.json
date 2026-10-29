@@ -1,0 +1,25 @@
+{
+  "name": "@hyde/node",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "start": "tsx --env-file-if-exists=../../.env src/main.ts"
+  },
+  "dependencies": {
+    "@hyde/adapter-acp": "workspace:*",
+    "@hyde/adapter-claude-code": "workspace:*",
+    "@hyde/adapter-codex": "workspace:*",
+    "@hyde/adapter-command": "workspace:*",
+    "@hyde/adapter-opencode": "workspace:*",
+    "@hyde/core": "workspace:*",
+    "@hyde/mcp-harness": "workspace:*",
+    "@hyde/workspace": "workspace:*",
+    "tsx": "4.23.15",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
+  }
+}

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HarnessEvent } from '@hyde/core';
@@ -55,19 +55,28 @@ describe('StreamParser (recorded Claude Code 2.1.310 streams)', () => {
 describe('buildArgs', () => {
   it('builds a headless, unattended, never-bare command', () => {
     const args = buildArgs(
-      { cwd: '/w', prompt: 'do it', packetFile: '/p.md', mcpConfigFile: '/m.json', deny: ['Bash(git push*)'], allow: ['mcp__hyde__*'] },
+      { cwd: '/w', runDir: '/r', prompt: 'do it', packetFile: '/p.md', mcp: { command: 'node', args: [], env: {} }, deny: ['Bash(git push*)'], allow: ['mcp__hyde__*'] },
       { resume: 'sess-1' },
     );
     expect(args).not.toContain('--bare');
     expect(args.slice(0, 5)).toEqual(['-p', 'do it', '--output-format', 'stream-json', '--verbose']);
     expect(args).toEqual(expect.arrayContaining(['--permission-prompts', 'none', '--resume', 'sess-1', '--strict-mcp-config']));
     expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash(git push*)');
+    expect(args[args.indexOf('--mcp-config') + 1]).toBe('/r/claude-mcp.json');
+  });
+
+  it('makes planner and reviewer runs read-only with structured output', () => {
+    const args = buildArgs({ cwd: '/w', runDir: '/r', prompt: 'plan', readOnly: true, jsonSchema: { type: 'object' }, effort: 'high' });
+    expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'dontAsk', '--json-schema', '{"type":"object"}', '--effort', 'high']));
+    const deny = args.slice(args.indexOf('--disallowedTools') + 1);
+    expect(deny).toEqual(expect.arrayContaining(['Edit', 'Write', 'Bash']));
+    expect(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools'))).not.toContain('Bash');
   });
 });
 
 describe('scrubEnv', () => {
   it('keeps the basics and drops secrets', () => {
-    const env = scrubEnv({ PATH: '/bin', HOME: '/h', ANTHROPIC_API_KEY: 'x', TELEGRAM_BOT_TOKEN: 'y', LC_ALL: 'C' }, { DEVFLOW_HARNESS: '1' });
+    const env = scrubEnv({ PATH: '/bin', HOME: '/h', ANTHROPIC_API_KEY: 'x', OPENAI_API_KEY: 'z', TELEGRAM_BOT_TOKEN: 'y', LC_ALL: 'C' }, { DEVFLOW_HARNESS: '1' });
     expect(env).toEqual({ PATH: '/bin', HOME: '/h', LC_ALL: 'C', DEVFLOW_HARNESS: '1' });
   });
 });
@@ -79,6 +88,7 @@ describe('ClaudeCodeAdapter process handling', () => {
     process.env.HYDE_SECRET = 'should-not-leak';
     const handle = await adapter.start('run-1', {
       cwd: fixtures,
+      runDir: fixtures,
       prompt: 'hi',
       env: { FAKE_STREAM: join(fixtures, 'text-only.jsonl') },
     });
@@ -92,6 +102,7 @@ describe('ClaudeCodeAdapter process handling', () => {
   it('reports a cancelled run after SIGINT', async () => {
     const handle = await adapter.start('run-2', {
       cwd: fixtures,
+      runDir: fixtures,
       prompt: 'hi',
       env: { FAKE_STREAM: join(fixtures, 'text-only.jsonl'), FAKE_HANG: '1' },
     });
@@ -107,17 +118,17 @@ describe('ClaudeCodeAdapter process handling', () => {
   });
 
   it('stops a run whose harness MCP server failed to connect (regression: path with a space)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hyde-mcp-'));
-    const mcpConfigFile = join(dir, 'mcp.json');
-    writeFileSync(mcpConfigFile, JSON.stringify({ mcpServers: { hyde: { command: 'x' } } }));
+    const dir = mkdtempSync(join(tmpdir(), 'hyde mcp '));
     const handle = await adapter.start('run-3', {
       cwd: fixtures,
+      runDir: dir,
       prompt: 'hi',
-      mcpConfigFile,
+      mcp: { command: 'x', args: [], env: {} },
       env: { FAKE_STREAM: join(fixtures, 'mcp-failed.jsonl'), FAKE_HANG: '1' },
     });
     const events: HarnessEvent[] = [];
     for await (const e of adapter.events(handle)) events.push(e);
+    expect(JSON.parse(readFileSync(join(dir, 'claude-mcp.json'), 'utf8'))).toEqual({ mcpServers: { hyde: { command: 'x', args: [], env: {} } } });
     rmSync(dir, { recursive: true, force: true });
     expect(events.at(-1)).toEqual({ type: 'run.failed', reason: 'crashed', detail: 'MCP server(s) failed to connect: hyde' });
   });

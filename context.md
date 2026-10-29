@@ -49,8 +49,8 @@
 | Environment | Branch | URL | Set up properly? |
 |---|---|---|---|
 | Local | feature branches | 127.0.0.1:7420 (hub API) | yes |
-| Staging | `staging` | origin/staging | yes: tracked, in sync, branch protection on |
-| Production | `main` | origin/main (default branch) | yes: tracked, in sync, branch protection on |
+| Staging | `staging` | origin/staging | protected on GitHub; local `staging` is behind origin (owner merged PR #1/#2 on GitHub) |
+| Production | `main` | origin/main (default branch) | protected on GitHub; local `main` is behind origin |
 
 `main` and `staging` were created on 2026-10-27 from an empty root commit (`4ebbcf3`).
 - **Remote:** `origin` = https://github.com/Hyde-OpenSource/Hyde-Code (**public**). Pushed 2026-10-27.
@@ -85,6 +85,11 @@
 - **Hub / harnessd:** the hub process. **Run:** one CLI turn. **Task packet:** the markdown appended to the agent's system prompt.
 - **T-n / Q-n / A-n / R-n:** task, question, approval and incident ids.
 
+## 12. Phases 1-4 (2026-10-29)
+- Agents: claude-code, codex, opencode, acp, command adapters; optional, chosen in `pnpm hyde setup` or dashboard Settings.
+- Hub modules: agents.ts (pool, router), planner.ts, review.ts, policy-engine.ts, notifier.ts, browser.ts, nodes.ts, schedules.ts, plugins.ts, metrics.ts, setup.ts, detect.ts, http.ts (API + dashboard), orchestrator.ts.
+- Dashboard: apps/web (React + Vite), served by the hub from apps/web/dist; `pnpm hyde dashboard` prints the login link.
+- Local test config: hyde.config.json (gitignored) runs claude-1 (haiku), codex-1, opencode-1 (free model) on this repo with base `staging`.
+
 ## 11. Open questions for the user
-- A separate GitHub test repo for the Phase 0 gate demo (agent PRs), or use Hyde-Code itself?
 - Telegram bot token and the owner's Telegram user id (or use `/pair`).

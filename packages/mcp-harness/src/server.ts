@@ -4,7 +4,8 @@ import { z } from 'zod';
 // The tools every agent uses to talk to the harness (docs/plan.md: "Give every worker a
 // harness MCP server"). Unattended runs have no AskUserQuestion, so ask_question is the way in.
 
-export type HubCall = (tool: 'ask_question' | 'report_progress' | 'complete_task', args: unknown) => Promise<string>;
+export const TOOLS = ['ask_question', 'report_progress', 'complete_task', 'request_approval', 'propose_lesson'] as const;
+export type HubCall = (tool: (typeof TOOLS)[number], args: unknown) => Promise<string>;
 
 export function createHarnessServer(call: HubCall): McpServer {
   const server = new McpServer({ name: 'hyde', version: '0.0.0' });
@@ -56,6 +57,32 @@ export function createHarnessServer(call: HubCall): McpServer {
       },
     },
     (args) => reply('complete_task', args),
+  );
+
+  server.registerTool(
+    'request_approval',
+    {
+      description:
+        "Ask the owner to approve something you may not do on your own: adding a dependency, changing the task's scope, " +
+        'or a destructive step. Call it, then end your turn; you will be resumed with the decision.',
+      inputSchema: {
+        kind: z.enum(['new-dependency', 'scope-change', 'destructive']),
+        summary: z.string().min(1).describe('What exactly you want to do and why'),
+        command: z.string().optional().describe('The exact command, if any (e.g. "npm install zod")'),
+      },
+    },
+    (args) => reply('request_approval', args),
+  );
+
+  server.registerTool(
+    'propose_lesson',
+    {
+      description:
+        'Propose a one-line lesson for CLAUDE.md and AGENTS.md (a rule future agents should follow, learned from a ' +
+        'correction, a bug pattern or a hard-won fix). The owner approves it before it is written.',
+      inputSchema: { text: z.string().min(10).max(300).describe('The lesson as a rule, e.g. "Run migrations before seeding"') },
+    },
+    (args) => reply('propose_lesson', args),
   );
 
   return server;
