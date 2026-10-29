@@ -1106,11 +1106,12 @@ pub fn code_task(
             )
             .trim()
             .to_owned()),
-            Err(error)
-                if error.code.as_deref() == Some("project")
-                    && !error.message.contains("Projects") =>
-            {
-                Err(format!("{} Projects: {}.", error.message, project_list()))
+            Err(error) if error.code.as_deref() == Some("project") => {
+                // Decide on the machine `code` only; the hub's wording is for people and may change.
+                Err(format!(
+                    "Hyde Code couldn't match “{project_id}” to one project. Projects: {}.",
+                    project_list()
+                ))
             }
             Err(error) => Err(error.message),
         };
