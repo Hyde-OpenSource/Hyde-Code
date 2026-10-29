@@ -80,8 +80,7 @@
 - **Why:** /devflow-setup in a new project. Owner chose "git init plus staging" and "move .md into docs/".
 - **Files:** CLAUDE.md, context.md, progress.md, agents.md, AgentQuestions.md, AgentAnswers.md, role.md, tasks.md, report.md, docs/plan.md
 - **Verified:** `git branch -a` shows main and staging at 4ebbcf3; the bootstrap script reported every file as created.
-- **Open / follow-ups:** No remote yet (owner will give URLs.
-
+- **Open / follow-ups:** No remote yet (owner will give URLs).
 
 ## History (rebuilt from earlier records)
 <!-- Filled from git log / older notes at setup time. Leave empty if there was no history. -->
