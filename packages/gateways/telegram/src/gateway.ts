@@ -1,9 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { ChatGateway, Inbound, OutboundMessage } from '@hyde/core';
-import { Bot, type Context } from 'grammy';
-import { decodeAction, encodeAction, HELP_TEXT, parseCommand } from './commands.ts';
+import { actionToCommand, decodeAction, encodeAction, HELP_TEXT, parseCommand, type ChatGateway, type Inbound, type OutboundMessage } from '@hyde/core';
+import { Bot, InputFile, type Context } from 'grammy';
 
 export interface TelegramOptions {
   token: string;
@@ -14,6 +13,8 @@ export interface TelegramOptions {
   /** File that stores user ids paired with a one-time code. */
   pairingFile: string;
   log?: (msg: string) => void;
+  /** Tests: record API calls instead of calling Telegram, and don't poll. */
+  offline?: { calls: { method: string; payload: unknown }[] };
 }
 
 /**
@@ -30,7 +31,17 @@ export class TelegramGateway implements ChatGateway {
   private readonly log: (msg: string) => void;
 
   constructor(private readonly options: TelegramOptions) {
-    this.bot = new Bot(options.token);
+    this.bot = new Bot(
+      options.token,
+      options.offline ? { botInfo: { id: 1, is_bot: true, first_name: 'Hyde', username: 'hyde_test_bot' } as never } : {},
+    );
+    if (options.offline) {
+      const calls = options.offline.calls;
+      this.bot.api.config.use(async (_prev, method, payload) => {
+        calls.push({ method, payload });
+        return { ok: true, result: { message_id: calls.length, date: 0, chat: { id: 0, type: 'private' } } } as never;
+      });
+    }
     this.allowed = new Set([...options.allowedUserIds, ...readPaired(options.pairingFile)]);
     this.log = options.log ?? (() => {});
   }
@@ -86,13 +97,10 @@ export class TelegramGateway implements ChatGateway {
         return;
       }
       await ctx.answerCallbackQuery();
-      const command =
-        action.kind === 'answer'
-          ? ({ kind: 'answer', questionId: action.questionId, text: `#option:${action.option}` } as const)
-          : ({ kind: 'decide', approvalId: action.approvalId, approved: action.approved } as const);
-      await this.dispatch(ctx, onInbound, { command, ...this.ids(ctx) });
+      await this.dispatch(ctx, onInbound, { command: actionToCommand(action), ...this.ids(ctx) });
     });
 
+    if (this.options.offline) return;
     await this.bot.init();
     this.log(`telegram: polling as @${this.bot.botInfo.username}`);
     // Not awaited: bot.start() resolves only when polling stops.
@@ -108,15 +116,24 @@ export class TelegramGateway implements ChatGateway {
       link_preview_options: { is_disabled: true },
     });
     if (message.questionId) this.questionMessages.set(`${chatId}:${sent.message_id}`, message.questionId);
+    for (const image of message.images ?? []) {
+      await this.bot.api.sendPhoto(chatId, new InputFile(image.path), image.caption ? { caption: image.caption.slice(0, 1000) } : {});
+    }
   }
 
   async stop(): Promise<void> {
-    await this.bot.stop();
+    if (!this.options.offline) await this.bot.stop();
   }
 
-  private ids(ctx: Context): { userId: string; chatId: string; commandId: string } {
+  /** Feeds one update through the handlers (tests and webhook mode). */
+  handleUpdate(update: unknown): Promise<void> {
+    return this.bot.handleUpdate(update as never);
+  }
+
+  private ids(ctx: Context): { userId: string; gateway: string; chatId: string; commandId: string } {
     return {
       userId: `tg:${ctx.from!.id}`,
+      gateway: 'telegram',
       chatId: String(ctx.chat!.id),
       commandId: `tg:${ctx.update.update_id}`,
     };

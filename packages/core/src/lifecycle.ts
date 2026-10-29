@@ -3,16 +3,16 @@ import type { TaskStatus } from './events.ts';
 // Allowed task transitions (docs/plan.md, "The orchestrator brain"). Code decides control
 // flow; anything not listed here is a bug and is refused.
 const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
-  backlog: ['clarifying', 'ready', 'cancelled'],
-  clarifying: ['ready', 'blocked', 'cancelled'],
+  backlog: ['clarifying', 'ready', 'blocked', 'cancelled'],
+  clarifying: ['ready', 'running', 'blocked', 'cancelled'],
   ready: ['running', 'blocked', 'cancelled'],
   running: ['ready', 'verifying', 'blocked', 'failed', 'cancelled'],
   verifying: ['ready', 'running', 'review', 'awaiting_merge', 'blocked', 'failed', 'cancelled'],
-  review: ['running', 'awaiting_merge', 'blocked', 'cancelled'],
+  review: ['ready', 'running', 'verifying', 'awaiting_merge', 'blocked', 'failed', 'cancelled'],
   // Only the owner's merge tap moves a task to done.
-  awaiting_merge: ['running', 'done', 'blocked', 'cancelled'],
+  awaiting_merge: ['ready', 'running', 'done', 'blocked', 'cancelled'],
   done: [],
-  blocked: ['ready', 'running', 'verifying', 'awaiting_merge', 'failed', 'cancelled'],
+  blocked: ['ready', 'clarifying', 'running', 'verifying', 'awaiting_merge', 'failed', 'cancelled'],
   failed: ['ready', 'cancelled'],
   cancelled: [],
 };

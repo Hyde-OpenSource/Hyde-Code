@@ -1,152 +1,87 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { createInterface } from 'node:readline';
-import { promisify } from 'node:util';
-import type { AgentAdapter, DetectResult, HarnessEvent, QuotaSnapshot, RunHandle, RunSpec } from '@hyde/core';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { execFileAsync, ProcessAdapter, type Launch, type LaunchWrapper, type LineParser } from '@hyde/adapter-common';
+import type { DetectResult, RunSpec } from '@hyde/core';
 import { StreamParser } from './parse.ts';
 
-const run = promisify(execFile);
-
-// Variables a Claude run may inherit. Everything else is dropped, so hub secrets (chat
-// tokens, ANTHROPIC_API_KEY, which would switch billing away from the subscription) never
-// reach the agent. Added back explicitly through RunSpec.env when a task needs them.
-const ENV_ALLOW = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|TERM|TZ|TMPDIR|LC_[A-Z_]+|XDG_[A-Z_]+)$/;
-
-export function scrubEnv(source: NodeJS.ProcessEnv, extra: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (value !== undefined && ENV_ALLOW.test(key)) env[key] = value;
-  }
-  return { ...env, ...extra };
-}
-
-export interface ClaudeArgsOptions {
-  resume?: string;
-}
+const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'mcp__hyde__ask_question', 'mcp__hyde__report_progress'];
+const WRITE_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'];
 
 /** CLI arguments for one headless turn. Never `--bare`: bare mode skips the subscription login. */
-export function buildArgs(spec: RunSpec, options: ClaudeArgsOptions = {}): string[] {
+export function buildArgs(spec: RunSpec, options: { resume?: string } = {}): string[] {
   const args = ['-p', spec.prompt, '--output-format', 'stream-json', '--verbose'];
-  args.push('--permission-mode', 'acceptEdits', '--permission-prompts', 'none');
+  // dontAsk denies anything not allowed; acceptEdits also allows file edits in the worktree.
+  args.push('--permission-mode', spec.readOnly ? 'dontAsk' : 'acceptEdits', '--permission-prompts', 'none');
   if (options.resume) args.push('--resume', options.resume);
   if (spec.model) args.push('--model', spec.model);
+  if (spec.effort) args.push('--effort', spec.effort);
   if (spec.packetFile) args.push('--append-system-prompt-file', spec.packetFile);
-  if (spec.mcpConfigFile) args.push('--mcp-config', spec.mcpConfigFile, '--strict-mcp-config');
-  if (spec.allow?.length) args.push('--allowedTools', ...spec.allow);
-  if (spec.deny?.length) args.push('--disallowedTools', ...spec.deny);
+  if (spec.mcp) args.push('--mcp-config', join(spec.runDir, 'claude-mcp.json'), '--strict-mcp-config');
+  if (spec.jsonSchema) args.push('--json-schema', JSON.stringify(spec.jsonSchema));
+  if (spec.policyHook) args.push('--settings', join(spec.runDir, 'claude-settings.json'));
+  for (const dir of spec.writableDirs ?? []) args.push('--add-dir', dir);
+  const allow = spec.readOnly ? READ_ONLY_TOOLS : (spec.allow ?? []);
+  const deny = spec.readOnly ? [...WRITE_TOOLS, ...(spec.deny ?? [])] : (spec.deny ?? []);
+  if (allow.length) args.push('--allowedTools', ...allow);
+  if (deny.length) args.push('--disallowedTools', ...deny);
   return args;
 }
 
-interface ActiveRun {
-  child: ChildProcess;
-  interrupted: boolean;
-  /** Servers from the run's MCP config; the run is stopped if one fails to connect. */
-  requiredMcp: string[];
+/** Files the CLI reads, written next to the run (MCP config, policy hook settings). */
+export function writeRunFiles(spec: RunSpec): void {
+  if (spec.mcp) {
+    writeFileSync(join(spec.runDir, 'claude-mcp.json'), JSON.stringify({ mcpServers: { hyde: spec.mcp } }), { mode: 0o600 });
+  }
+  if (spec.policyHook) {
+    const hook = {
+      type: 'http',
+      url: spec.policyHook.url,
+      headers: { Authorization: `Bearer ${spec.policyHook.token}` },
+      timeout: 30,
+    };
+    writeFileSync(
+      join(spec.runDir, 'claude-settings.json'),
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash|Edit|Write|MultiEdit|NotebookEdit', hooks: [hook] }] } }),
+      { mode: 0o600 },
+    );
+  }
 }
 
-export class ClaudeCodeAdapter implements AgentAdapter {
+export class ClaudeCodeAdapter extends ProcessAdapter {
   readonly kind = 'claude-code' as const;
-  private readonly active = new Map<string, ActiveRun>();
+  readonly vendor = 'anthropic' as const;
+  readonly structuredOutput = true;
 
-  constructor(private readonly bin = 'claude') {}
+  constructor(bin = 'claude', options: { wrap?: LaunchWrapper } = {}) {
+    super(bin, options);
+  }
 
   async detect(): Promise<DetectResult> {
     try {
-      const { stdout: versionOut } = await run(this.bin, ['--version']);
+      const { stdout: versionOut } = await execFileAsync(this.bin, ['--version']);
       const version = versionOut.trim().split(' ')[0];
-      const { stdout } = await run(this.bin, ['auth', 'status']);
+      const { stdout } = await execFileAsync(this.bin, ['auth', 'status']);
       const status = JSON.parse(stdout) as { loggedIn?: boolean; authMethod?: string; subscriptionType?: string };
+      const signedIn = Boolean(status.loggedIn);
       return {
         installed: true,
         ...(version && { version }),
-        signedIn: Boolean(status.loggedIn),
+        signedIn,
         // Only the plan, never the email or tokens.
         account: [status.authMethod, status.subscriptionType].filter(Boolean).join(':'),
+        ...(!signedIn && { problem: 'Run `claude` once and sign in with your subscription.' }),
       };
     } catch {
-      return { installed: false, signedIn: false };
+      return { installed: false, signedIn: false, problem: 'Install Claude Code: https://code.claude.com' };
     }
   }
 
-  start(runId: string, spec: RunSpec): Promise<RunHandle> {
-    return Promise.resolve(this.spawn(runId, spec, buildArgs(spec)));
+  protected launch(spec: RunSpec, resume?: string): Launch {
+    writeRunFiles(spec);
+    return { command: this.bin, args: buildArgs(spec, resume ? { resume } : {}) };
   }
 
-  resume(runId: string, sessionRef: string, spec: RunSpec): Promise<RunHandle> {
-    return Promise.resolve(this.spawn(runId, spec, buildArgs(spec, { resume: sessionRef })));
-  }
-
-  send(): Promise<void> {
-    // Headless turns are one process each; follow-ups go through resume().
-    return Promise.reject(new Error('claude-code adapter: use resume() for follow-up turns'));
-  }
-
-  async interrupt(handle: RunHandle): Promise<void> {
-    const active = this.active.get(handle.runId);
-    if (!active) return;
-    active.interrupted = true;
-    // SIGINT ends the turn cleanly; SIGTERM exits 143 without a result.
-    active.child.kill('SIGINT');
-  }
-
-  async *events(handle: RunHandle): AsyncIterable<HarnessEvent> {
-    const active = this.active.get(handle.runId);
-    if (!active?.child.stdout) return;
-    const parser = new StreamParser();
-    const lines = createInterface({ input: active.child.stdout, crlfDelay: Infinity });
-    let mcpFailure: string | undefined;
-    for await (const line of lines) {
-      for (const event of parser.parseLine(line)) {
-        yield event;
-        // Without the harness MCP server the agent can't ask or report done; stop early
-        // instead of letting it work blind.
-        if (event.type === 'run.started' && !mcpFailure) {
-          const missing = parser.failedMcpServers.filter((name) => active.requiredMcp.includes(name));
-          if (missing.length) {
-            mcpFailure = `MCP server(s) failed to connect: ${missing.join(', ')}`;
-            active.child.kill('SIGINT');
-          }
-        }
-      }
-    }
-    const exit = await handle.exited;
-    this.active.delete(handle.runId);
-    if (mcpFailure) {
-      yield { type: 'run.failed', reason: 'crashed', detail: mcpFailure };
-    } else if (!parser.sawResult) {
-      yield active.interrupted
-        ? { type: 'run.failed', reason: 'cancelled' }
-        : { type: 'run.failed', reason: 'crashed', detail: `exit code ${exit.code} signal ${exit.signal}` };
-    }
-  }
-
-  async quota(): Promise<QuotaSnapshot | null> {
-    // Claude reports quota only inside a run (rate_limit_event); the hub keeps the latest.
-    return null;
-  }
-
-  private spawn(runId: string, spec: RunSpec, args: string[]): RunHandle {
-    const child = spawn(this.bin, args, {
-      cwd: spec.cwd,
-      env: scrubEnv(process.env, spec.env),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    // stderr is drained so a chatty CLI can never block on a full pipe.
-    child.stderr?.resume();
-    const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
-      child.once('exit', (code, signal) => resolve({ code, signal }));
-      child.once('error', () => resolve({ code: null, signal: null }));
-    });
-    this.active.set(runId, { child, interrupted: false, requiredMcp: mcpServerNames(spec.mcpConfigFile) });
-    return { runId, pid: child.pid, exited };
-  }
-}
-
-function mcpServerNames(file: string | undefined): string[] {
-  if (!file) return [];
-  try {
-    return Object.keys(JSON.parse(readFileSync(file, 'utf8')).mcpServers ?? {});
-  } catch {
-    return [];
+  protected parser(spec: RunSpec): LineParser {
+    return new StreamParser(spec.mcp ? ['hyde'] : []);
   }
 }

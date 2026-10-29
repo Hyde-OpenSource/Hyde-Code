@@ -12,10 +12,10 @@ async function connect(call: Parameters<typeof createHarnessServer>[0]) {
 }
 
 describe('harness MCP server', () => {
-  it('lists the three tools', async () => {
+  it('lists the harness tools', async () => {
     const client = await connect(async () => 'ok');
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['ask_question', 'complete_task', 'report_progress']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['ask_question', 'complete_task', 'propose_lesson', 'report_progress', 'request_approval']);
   });
 
   it('forwards validated calls to the hub', async () => {

@@ -1,3 +1,4 @@
+import type { LineParser } from '@hyde/adapter-common';
 import type { HarnessEvent, RateLimitStatus, RunFailureReason } from '@hyde/core';
 
 // Turns `claude -p --output-format stream-json --verbose` lines into normalized events.
@@ -11,12 +12,23 @@ type Block =
   | { type: 'tool_result'; tool_use_id: string; is_error?: boolean }
   | { type: string };
 
-export class StreamParser {
+export class StreamParser implements LineParser {
   private readonly toolNames = new Map<string, string>();
   /** True once a `result` line has been seen for the current turn. */
   sawResult = false;
   /** MCP servers the init line reported as failed to connect. */
   failedMcpServers: string[] = [];
+  abort?: string;
+
+  /** @param requiredMcp servers the run can't work without (stopped early if they fail). */
+  constructor(private readonly requiredMcp: string[] = []) {}
+
+  finish(exit: { code: number | null; signal: string | null }, interrupted: boolean): HarnessEvent[] {
+    if (this.sawResult) return [];
+    return interrupted
+      ? [{ type: 'run.failed', reason: 'cancelled' }]
+      : [{ type: 'run.failed', reason: 'crashed', detail: `exit code ${exit.code} signal ${exit.signal}` }];
+  }
 
   parseLine(line: string): HarnessEvent[] {
     const trimmed = line.trim();
@@ -33,6 +45,8 @@ export class StreamParser {
           this.failedMcpServers = (Array.isArray(msg.mcp_servers) ? msg.mcp_servers : [])
             .filter((m: { status?: string }) => m?.status === 'failed')
             .map((m: { name?: string }) => String(m.name));
+          const missing = this.failedMcpServers.filter((name) => this.requiredMcp.includes(name));
+          if (missing.length) this.abort = `MCP server(s) failed to connect: ${missing.join(', ')}`;
           return [{ type: 'run.started', sessionRef: String(msg.session_id), model: String(msg.model ?? 'unknown') }];
         }
         return [];
