@@ -31,5 +31,7 @@ Short version of the rules:
 - 2026-10-29: OpenAI structured outputs need strict schemas: every property required, additionalProperties false, use null for "absent".
 - 2026-10-29: Cut and diff task branches against a fetched origin/<base>; local base branches go stale when PRs merge on GitHub.
 - 2026-10-29: Watch quota before real test runs; the owner's Claude 5-hour window hit 99% during testing.
+- 2026-10-29: Never name a scratch script after a stdlib module (pty.py shadowed `pty`); run scratch Python with -I.
+- 2026-10-29: Check UI work with real screenshots (Playwright) at desktop and phone widths; overlapping name tags and an overflowing board only showed up there.
 
 <!-- devflow:end -->

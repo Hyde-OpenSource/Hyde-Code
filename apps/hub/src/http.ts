@@ -3,7 +3,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { normalizeCommandText, parseCommand, snapshot, TOOLS_NAMES, type Command, type EventStore } from '@hyde/core';
+import { describeEvent, normalizeCommandText, parseCommand, snapshot, TOOLS_NAMES, type Command, type EventStore } from '@hyde/core';
 import { Hono, type Context } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
@@ -174,6 +174,12 @@ export function createApi(deps: ApiDeps): Hono {
     if (!artifact || !artifact.path.startsWith(config.dataDir) || !existsSync(artifact.path)) return c.json({ error: 'not found' }, 404);
     const stream = Readable.toWeb(createReadStream(artifact.path)) as ReadableStream;
     return new Response(stream, { headers: { 'content-type': MIME[extname(artifact.path)] ?? 'application/octet-stream', 'content-length': String(statSync(artifact.path).size) } });
+  });
+
+  // The activity feed: recent events that read as one line each (no text deltas or tool noise).
+  app.get('/api/feed', owner, (c) => {
+    const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? 150) || 150));
+    return c.json(store.list({}).filter((e) => describeEvent(e) !== null).slice(-limit));
   });
 
   app.get('/api/audit', owner, (c) => {

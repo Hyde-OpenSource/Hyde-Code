@@ -77,7 +77,7 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
 
   return (
     <>
-      <div className="spread">
+      <div className="spread task-head">
         <div>
           <h1>
             {task.id}: {task.title}

@@ -18,6 +18,15 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-10-29: Office UI redesign (web) and a terminal UI
+- **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
+- **Branch:** feature/office-ui
+- **What:** Replaced the plain dashboard with a pixel-art office, drawn in code on a canvas (no new dependencies or bought tiles): Hyde's corner office, open-plan desks, a war room (whiteboard for planning, table for review), kitchen, server room and "your desk". Agents are little people who walk to where their work is; monitors show code, a question mark or an error; envelopes fly on dispatch, questions, approvals, reviews and PRs; sparkles on merge. Home page = floor + assign bar + live session terminal for the selected agent + side panel (Needs you / Team / Activity). New dark "night shift" theme for every page. Added `pnpm hyde tui`: the same office in the terminal (rooms, team table with quota bars, live session, board, inbox with approve/deny/reply/merge, activity, usage), live over SSE; `w` opens the web office and the web has a Terminal button. Shared, pure office logic (`agentActivity`, `describeEvent`, `sessionLine`, `openItems`, worktree path shortening) lives in `packages/core/src/office.ts` for both UIs. New `/api/feed` route for the activity feed.
+- **Why:** Owner said the UI was too plain and asked for an office like Munder Difflin's, plus a terminal UI with the option to switch.
+- **Files:** packages/core/src/office.ts, office.test.ts, index.ts, package.json; apps/hub/src/tui.ts, tui-render.ts, tui.test.ts, cli.ts, http.ts; apps/web/src/office/scene.ts, office/OfficeScene.tsx, main.tsx, api.ts, ui.tsx, styles.css, pages/Office.tsx, Inbox.tsx, TaskPage.tsx (Floor.tsx removed); apps/web/index.html; README.md
+- **Verified:** `pnpm test` 131 passing (new tests for agent placement, feed lines, path shortening, TUI frame size at 3 terminal sizes, colour-safe widths); `pnpm typecheck` clean. Screenshots with Playwright at 1440, 1280 and 390 px of Office, Board, Task and Settings, no console errors. Ran a real demo task (T-5, OpenCode free model, pinned): the office showed it planning at the whiteboard, then typing at its desk with the live session streaming, the question Q-7 on your desk, Claude reviewing. Stopped T-5 before its push (no PR) and removed its worktree. Ran the real TUI in a pseudo-terminal: it connected live, switched screens with keys and exited cleanly.
+- **Open / follow-ups:** The local branch opencode-1/feature/t-5-… from the demo is kept (branch deletion needs the owner). Telegram pairing waits for the owner (`/pair` code is printed at hub start).
+
 ### 2026-10-29: Real end-to-end runs on Hyde-Code; fixes for Codex, OpenAI schemas, stale base, OpenCode
 - **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
 - **Branch:** feature/roadmap-phases-1-4

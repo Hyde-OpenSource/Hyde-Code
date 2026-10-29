@@ -25,7 +25,23 @@ pnpm hyde setup        # pick agents, project, stages, chat apps; writes hyde.co
 pnpm build             # the web dashboard
 pnpm start             # the hub
 pnpm hyde dashboard    # prints a one-time login link for http://127.0.0.1:7420
+pnpm hyde tui          # or: the same office in your terminal
 ```
+
+## Two ways to watch: web or terminal
+
+Both read the same hub, so you can switch at any time and nothing is lost.
+
+- **Web** (`pnpm hyde dashboard`): a pixel-art office. Each agent is a person at a desk: typing when
+  working, at the war-room whiteboard when planning, at the war-room table when reviewing, in the
+  kitchen when free. Hyde (the hub) sits in the corner office and envelopes fly when work is handed
+  out, questions reach your desk, reviews come back and PRs go out. Click a person to watch their
+  session live. The side panel has *Needs you* (answer, approve, merge), *Team* and *Activity*.
+  The **⌨ Terminal** button shows how to switch.
+- **Terminal** (`pnpm hyde tui`): rooms, the team table with quota bars and the selected agent's
+  live session. Keys: `1`–`5` screens (Office, Board, Inbox, Activity, Usage), `↑↓` pick,
+  `enter` open, `a` approve or merge, `d` deny, `r` reply, `n` new task, `c` client message,
+  `:` any slash command, `w` open the web office, `q` quit. Set `NO_COLOR=1` for plain text.
 
 Optional: `pnpm --filter @hyde/hub exec playwright install chromium` for browser verification.
 
@@ -82,8 +98,8 @@ pnpm typecheck   # tsc (hub, packages, web)
 
 | Path | Contents |
 |---|---|
-| `apps/hub` | Config, orchestrator, router, planner, review, policy, merge queue, notifier, API, CLI, setup |
-| `apps/web` | Dashboard: Floor, Inbox, Board, Task, Usage, Office, Audit, Settings |
+| `apps/hub` | Config, orchestrator, router, planner, review, policy, merge queue, notifier, API, CLI, setup, terminal UI (`tui*.ts`) |
+| `apps/web` | Web dashboard: pixel office (`src/office`), Board, Inbox, Task, Usage, Audit, Settings |
 | `apps/node` | Worker node for teammates' machines |
 | `packages/core` | Contracts, event schemas, event store, projections, lifecycle, chat commands |
 | `packages/adapters/*` | claude-code, codex, opencode, acp, command, and the shared process base |

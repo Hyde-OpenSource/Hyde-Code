@@ -1,20 +1,15 @@
 import { useState } from 'react';
+import { openItems } from '@hyde/core/office';
 import { ago, api, type HubState } from '../api.ts';
 import { CommandButton, type PageProps } from '../ui.tsx';
 
-/** Open items whose task is still in play (cancelled and finished tasks need nobody). */
-export function openItems(s: HubState) {
-  const live = (taskId: string) => !['done', 'cancelled'].includes(s.tasks.find((t) => t.id === taskId)?.status ?? 'done');
-  return {
-    questions: s.questions.filter((q) => q.status === 'open' && live(q.taskId)),
-    approvals: s.approvals.filter((a) => a.status === 'open' && live(a.taskId)),
-    lessons: s.lessons.filter((l) => l.status === 'proposed'),
-  };
-}
-
 export function inboxCount(s: HubState): number {
   const o = openItems(s);
-  return o.questions.length + o.approvals.length + o.lessons.length;
+  return o.questions.length + o.approvals.length + o.lessons.length + mergeable(s).length;
+}
+
+function mergeable(s: HubState) {
+  return s.tasks.filter((t) => t.status === 'awaiting_merge' && t.prUrl && !t.children.length);
 }
 
 function Answer({ id, options, refresh, notify }: { id: string; options: string[] } & Pick<PageProps, 'refresh' | 'notify'>) {
@@ -56,20 +51,17 @@ function Answer({ id, options, refresh, notify }: { id: string; options: string[
 }
 
 /** Everything that needs the owner, most urgent first; the same items appear in chat. */
-export function Inbox({ state, refresh, notify }: PageProps) {
+export function NeedsYou({ state, refresh, notify }: Pick<PageProps, 'state' | 'refresh' | 'notify'>) {
   const { questions, approvals, lessons } = openItems(state);
-  const incidents = [...state.incidents].reverse().slice(0, 10);
-  const merges = state.tasks.filter((t) => t.status === 'awaiting_merge' && t.prUrl && !t.children.length);
+  const merges = mergeable(state);
   const task = (id: string) => state.tasks.find((t) => t.id === id);
 
   return (
     <>
-      <h1>Inbox</h1>
-      <p className="sub">Questions, approvals and incidents. Answer here or in chat.</p>
-      {!questions.length && !approvals.length && !lessons.length && !merges.length && <div className="empty">Nothing is waiting for you.</div>}
+      {!questions.length && !approvals.length && !lessons.length && !merges.length && <div className="empty">Nothing is waiting for you. The team is on it.</div>}
 
       {approvals.map((a) => (
-        <div className="card stack" key={a.id} style={{ marginBottom: 12 }}>
+        <div className="card stack item" key={a.id}>
           <div className="spread">
             <strong>
               {a.id} · {a.kind.replace('-', ' ')}
@@ -89,7 +81,7 @@ export function Inbox({ state, refresh, notify }: PageProps) {
       ))}
 
       {questions.map((q) => (
-        <div className="card stack" key={q.id} style={{ marginBottom: 12 }}>
+        <div className="card stack item" key={q.id}>
           <div className="spread">
             <strong>
               {q.id} {q.blocking ? '' : '(not blocking)'}
@@ -104,7 +96,7 @@ export function Inbox({ state, refresh, notify }: PageProps) {
       ))}
 
       {merges.map((t) => (
-        <div className="card spread" key={t.id} style={{ marginBottom: 12 }}>
+        <div className="card spread item" key={t.id}>
           <div>
             <strong>{t.id}</strong> ready to merge: <a href={`#task/${t.id}`}>{t.title}</a>
             <div className="meta">
@@ -116,7 +108,7 @@ export function Inbox({ state, refresh, notify }: PageProps) {
       ))}
 
       {lessons.map((l) => (
-        <div className="card spread" key={l.id} style={{ marginBottom: 12 }}>
+        <div className="card spread item" key={l.id}>
           <div>
             <strong>{l.id}</strong> lesson from {l.by}: {l.text}
           </div>
@@ -127,6 +119,17 @@ export function Inbox({ state, refresh, notify }: PageProps) {
         </div>
       ))}
 
+    </>
+  );
+}
+
+export function Inbox(props: PageProps) {
+  const incidents = [...props.state.incidents].reverse().slice(0, 10);
+  return (
+    <>
+      <h1>Inbox</h1>
+      <p className="sub">Questions, approvals and merges. Answer here, in the terminal UI, or in chat.</p>
+      <NeedsYou {...props} />
       {incidents.length > 0 && (
         <>
           <h2>Recent incidents</h2>

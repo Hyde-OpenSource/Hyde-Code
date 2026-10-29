@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { Command } from '@hyde/core';
-import { api, type HubState } from './api.ts';
+import { api, type FeedLine, type HubState } from './api.ts';
 
 export interface PageProps {
   state: HubState;
   refresh: () => void;
   notify: (text: string) => void;
+  feed: FeedLine[];
 }
 
 export function Toast({ text, onDone }: { text: string; onDone: () => void }) {
@@ -43,6 +44,7 @@ export function CommandButton({ command, label, notify, refresh, kind = '' }: { 
   const [busy, setBusy] = useState(false);
   return (
     <button
+      type="button"
       className={`btn ${kind}`}
       disabled={busy}
       onClick={async () => {
@@ -73,5 +75,5 @@ export function QuotaBar({ value }: { value: number }) {
 }
 
 export function vendorColor(vendor: string): string {
-  return { anthropic: '#c96442', openai: '#10a37f', google: '#4285f4' }[vendor] ?? '#7a6ff0';
+  return { anthropic: '#d97757', openai: '#19b88a', google: '#4c8df6' }[vendor] ?? '#9b7bf0';
 }

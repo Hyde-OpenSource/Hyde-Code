@@ -5,3 +5,4 @@ export * from './projection.ts';
 export * from './store.ts';
 export * from './chat.ts';
 export * from './commands.ts';
+export * from './office.ts';
