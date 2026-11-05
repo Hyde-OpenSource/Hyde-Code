@@ -103,7 +103,7 @@ export interface QuestionView {
   answeredSeq?: number;
   answeredBy?: string;
   /** Later asks (any agent, any task) that matched this question instead of creating a new one. */
-  matches: { taskId: string; runId: string; text: string; by: string; ts: string }[];
+  matches: { taskId: string; runId: string; text: string; by: string; ts: string; blocking: boolean }[];
 }
 
 export interface ApprovalView {
@@ -423,7 +423,7 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
     }
     case 'question.matched': {
       const p = record.payload;
-      state.questions.get(p.questionId)?.matches.push({ taskId: p.taskId, runId: p.runId, text: p.text, by: p.by, ts: record.ts });
+      state.questions.get(p.questionId)?.matches.push({ taskId: p.taskId, runId: p.runId, text: p.text, by: p.by, ts: record.ts, blocking: p.blocking });
       break;
     }
     case 'question.answered': {

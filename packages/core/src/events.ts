@@ -195,6 +195,8 @@ export const eventPayloads = {
     status: z.enum(['open', 'answered']),
     score: z.number(),
     by: z.string(),
+    /** The asking run waits for this question's answer. */
+    blocking: z.boolean().default(false),
   }),
   'approval.requested': z.object({
     approvalId: z.string(),

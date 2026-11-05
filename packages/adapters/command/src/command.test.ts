@@ -5,9 +5,9 @@ import type { HarnessEvent } from '@hyde/core';
 import { describe, expect, it } from 'vitest';
 import { CommandAdapter } from './index.ts';
 
-async function collect(adapter: CommandAdapter, prompt = 'hello') {
+async function collect(adapter: CommandAdapter, prompt = 'hello', env?: Record<string, string>) {
   const dir = mkdtempSync(join(tmpdir(), 'hyde-cmd-'));
-  const handle = await adapter.start('run-1', { cwd: dir, runDir: dir, prompt });
+  const handle = await adapter.start('run-1', { cwd: dir, runDir: dir, prompt, ...(env && { env }) });
   const events: HarnessEvent[] = [];
   for await (const e of adapter.events(handle)) events.push(e);
   rmSync(dir, { recursive: true, force: true });
@@ -29,6 +29,13 @@ describe('CommandAdapter', () => {
   it('fails on a non-zero exit', async () => {
     const events = await collect(new CommandAdapter(['sh', '-c', 'echo oops; exit 3']));
     expect(events.at(-1)).toMatchObject({ type: 'run.failed', reason: 'crashed', detail: expect.stringContaining('exit code 3') });
+  });
+
+  it('gives the agent process harness mode (DEVFLOW_HARNESS=1) and nothing outside the allowlist', async () => {
+    process.env.HYDE_TEST_SECRET = 'leak';
+    const events = await collect(new CommandAdapter(['sh', '-c', 'echo "mode=$DEVFLOW_HARNESS secret=$HYDE_TEST_SECRET"']), 'x', { DEVFLOW_HARNESS: '1' });
+    delete process.env.HYDE_TEST_SECRET;
+    expect(events.at(-1)).toEqual({ type: 'run.completed', summary: 'mode=1 secret=' });
   });
 
   it('detects missing binaries', async () => {

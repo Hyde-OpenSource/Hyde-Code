@@ -51,11 +51,12 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO
+- **Status:** DONE
 - **Priority:** high
 - **Files / area:** apps/hub/src/{orchestrator,planner}.ts, packages/mcp-harness/**, packages/devflow/**, packages/core/**, apps/web (Inbox), apps/desktop (questions)
 - **Done when:** (1) A question memory per task and per project: before `ask_question` (any agent: Claude, Codex, OpenCode, ACP) or a planner question is recorded, the hub compares it with the open and answered questions (normalised text plus a cheap similarity check). An answered match returns the earlier answer to the agent at once; an open match links to the existing Q-n instead of creating a new one. (2) Every run (planner, re-plan, implement, continue, review, fix, conflict) gets all answered questions for its task, plus the project's standing decisions, in its packet, whichever agent runs it. (3) The planner asks only what blocks the work. Small choices become stated assumptions the owner can see and change, not questions, with a cap on questions per plan (configurable). A re-plan after answers must not ask again what was answered. (4) Agents in harness mode never ask the devflow "main or child session?" question: check this for every adapter (DEVFLOW_HARNESS env and the task packet). (5) Regression tests built from the real duplicates in the owner's event log (T-1 Q-1..Q-5, T-6 Q-8/Q-9, T-7 Q-10..Q-14) and a test where two different agents ask the same thing.
 - **Notes:**
+  - 2026-11-05: Question memory, planner cap/assumptions, harness-mode lines, regression tests from the real event log. Word-based matching (not semantic).
 
 ## T-004: Fix what fails in real runs
 - **Assigned to:** agent-hyde-autonomy

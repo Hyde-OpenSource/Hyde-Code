@@ -45,6 +45,7 @@ import type { Notifier } from './notifier.ts';
 import { checkPlan, CLASSIFY_SCHEMA, classifyPrompt, HARNESS_MODE_LINE, parseClassification, PLAN_SCHEMA, plannerPrompt } from './planner.ts';
 import { decide as decidePolicy, hookResponse } from './policy-engine.ts';
 import { blockingFindings, parseReview, REVIEW_SCHEMA, reviewFixPrompt, reviewPrompt } from './review.ts';
+import { findMatch, questionOf } from './questions.ts';
 import { readWorkflow, renderTemplate, type Workflow } from './workflow.ts';
 
 const HARNESS: Actor = { kind: 'harness', id: 'hub' };
@@ -491,7 +492,7 @@ export class Orchestrator {
     const since = lastRun?.dispatchedSeq ?? 0;
     if (task.sessionRef) {
       const answers = [...this.state.questions.values()].filter(
-        (q) => q.taskId === task.id && q.status === 'answered' && (q.answeredSeq ?? 0) > since,
+        (q) => questionOf(q, task.id) && q.status === 'answered' && (q.answeredSeq ?? 0) > since,
       );
       const decisions = [...this.state.approvals.values()].filter(
         (a) => a.taskId === task.id && a.status !== 'open' && (a.decidedSeq ?? 0) > since && a.kind !== 'first-push' && a.kind !== 'merge' && a.kind !== 'promote',
@@ -575,7 +576,7 @@ export class Orchestrator {
     if (run.mode === 'classify') return this.afterClassify(task, runId);
     if (task.status !== 'running') return; // cancelled or moved on while running
 
-    const openBlocking = [...this.state.questions.values()].find((q) => q.runId === runId && q.blocking && q.status === 'open');
+    const openBlocking = this.openBlockingFor(runId);
     if (openBlocking) {
       this.setStatus(task, 'blocked', `waiting for ${openBlocking.id}`, { kind: 'question', id: openBlocking.id });
       return;
@@ -710,13 +711,20 @@ export class Orchestrator {
     });
   }
 
+  /** An open question the run is waiting for: one it asked as blocking, or an earlier one it was linked to. */
+  private openBlockingFor(runId: string): QuestionView | undefined {
+    return [...this.state.questions.values()].find(
+      (q) => q.status === 'open' && ((q.runId === runId && q.blocking) || q.matches.some((m) => m.runId === runId && m.blocking)),
+    );
+  }
+
   /** Answered and open questions of a task, plus answered questions of the project's other tasks. */
   private questionMemory(task: TaskView): { answers: QuestionView[]; open: QuestionView[]; decisions: QuestionView[] } {
     const all = [...this.state.questions.values()];
-    const answers = all.filter((q) => q.taskId === task.id && q.status === 'answered');
-    const open = all.filter((q) => q.taskId === task.id && q.status === 'open');
+    const answers = all.filter((q) => questionOf(q, task.id) && q.status === 'answered');
+    const open = all.filter((q) => questionOf(q, task.id) && q.status === 'open');
     const decisions = all
-      .filter((q) => q.status === 'answered' && q.taskId !== task.id && this.state.tasks.get(q.taskId)?.projectId === task.projectId)
+      .filter((q) => q.status === 'answered' && !questionOf(q, task.id) && this.state.tasks.get(q.taskId)?.projectId === task.projectId)
       .filter((q) => !answers.some((a) => a.text === q.text))
       .slice(-10);
     return { answers, open, decisions };
@@ -727,7 +735,7 @@ export class Orchestrator {
   private async afterPlan(task: TaskView, runId: string, live: LiveRun | undefined): Promise<void> {
     if (task.status !== 'clarifying') return;
     const run = this.state.runs.get(runId)!;
-    const asked = [...this.state.questions.values()].find((q) => q.runId === runId && q.blocking && q.status === 'open');
+    const asked = this.openBlockingFor(runId);
     if (asked && run.structured === undefined) {
       this.setStatus(task, 'blocked', `planner waiting for ${asked.id}`, { kind: 'question', id: asked.id });
       return;
@@ -759,7 +767,7 @@ export class Orchestrator {
     // Only blocking questions are asked, up to the cap; everything else becomes a stated assumption.
     const max = this.config.planner.maxQuestions;
     const blocking = plan.questions.filter((q) => q.blocking);
-    const assumptions = [
+    const assumptions: string[] = [
       ...plan.assumptions,
       ...plan.questions.filter((q) => !q.blocking).map((q) => `Left to the agent (not blocking): ${q.text}`),
       ...blocking.slice(max).map((q) => `Over the question limit, decide sensibly: ${q.text}`),
@@ -769,6 +777,20 @@ export class Orchestrator {
     // Questions first (devflow rule 4: never assume, but ask only what blocks the work).
     let firstBlocking: string | undefined;
     for (const q of questions) {
+      // Never ask twice: an answered match becomes an assumption, an open one is linked.
+      const match = findMatch(this.state, task, q.text);
+      if (match) {
+        const m = match.question;
+        this.append({
+          type: 'question.matched',
+          taskId: task.id,
+          runId,
+          payload: { questionId: m.id, taskId: task.id, runId, text: q.text, status: m.status, score: match.score, by: `planner ${run.agent}`, blocking: q.blocking && m.status === 'open' },
+        });
+        if (m.status === 'answered') assumptions.push(`Answered before as ${m.id}: ${m.text} → ${m.answer}`);
+        else if (q.blocking && !firstBlocking) firstBlocking = m.id;
+        continue;
+      }
       const questionId = nextId(this.state, 'Q');
       this.append({
         type: 'question.asked',
@@ -780,8 +802,9 @@ export class Orchestrator {
       if (q.blocking && !firstBlocking) firstBlocking = questionId;
     }
     if (firstBlocking) {
-      // Planned again once every blocking question has an answer.
+      // Planned again once every blocking question has an answer. The owner sees the assumptions now.
       this.setStatus(task, 'blocked', `planner waiting for ${firstBlocking}`, { kind: 'question', id: firstBlocking });
+      if (assumptions.length) await this.notifyAssumptions(task, assumptions);
       return;
     }
 
@@ -1390,20 +1413,22 @@ export class Orchestrator {
       payload: { questionId: q.id, answer, by: inbound.userId },
     });
     if (!recorded) return 'Already received.';
-    const task = this.state.tasks.get(q.taskId);
-    if (task?.status === 'blocked' && task.blockedBy?.id === q.id) {
-      const planRun = this.state.runs.get(q.runId)?.mode === 'plan';
-      if (planRun) {
+    // The question may block several tasks: its own and any whose agent asked the same thing.
+    const waiting = [...this.state.tasks.values()].filter((t) => t.status === 'blocked' && t.blockedBy?.id === q.id);
+    for (const task of waiting) {
+      const runId = q.taskId === task.id ? q.runId : (q.matches.findLast((m) => m.taskId === task.id)?.runId ?? q.runId);
+      if (this.state.runs.get(runId)?.mode === 'plan') {
         // Re-plan once every blocking planner question is answered.
-        const stillOpen = [...this.state.questions.values()].find((x) => x.runId === q.runId && x.blocking && x.status === 'open');
+        const stillOpen = this.openBlockingFor(runId);
         if (stillOpen) this.setStatus(task, 'blocked', `planner waiting for ${stillOpen.id}`, { kind: 'question', id: stillOpen.id });
         else this.setStatus(task, 'clarifying', `${q.id} answered; planning again`);
       } else {
         this.setStatus(task, 'ready', `${q.id} answered`);
       }
-      void this.tick();
     }
-    return `${q.id} answered: ${answer}`;
+    if (waiting.length) void this.tick();
+    const linked = new Set(q.matches.map((m) => m.taskId).filter((id) => id !== q.taskId));
+    return `${q.id} answered: ${answer}${linked.size ? ` (also sent to ${[...linked].join(', ')}, which asked the same)` : ''}`;
   }
 
   private decideApproval(approvalId: string, approved: boolean, inbound: Inbound, actor: Actor): string {
@@ -1593,11 +1618,30 @@ export class Orchestrator {
     const readOnly = READ_ONLY_MODES.includes(run.mode);
     switch (tool) {
       case 'ask_question': {
-        const questionId = nextId(this.state, 'Q');
         const blocking = args.blocking !== false;
         const options = Array.isArray(args.options) ? (args.options as string[]).slice(0, 4) : [];
         const assumption = typeof args.assumption === 'string' ? args.assumption : '';
         const text = String(args.question);
+        // Question memory: any agent, any run of this task, or a close match elsewhere in the project.
+        const match = findMatch(this.state, task, text);
+        if (match) {
+          const m = match.question;
+          this.deps.store.append({
+            type: 'question.matched',
+            actor,
+            taskId: task.id,
+            runId,
+            payload: { questionId: m.id, taskId: task.id, runId, text, status: m.status, score: match.score, by: run.agent, blocking: blocking && m.status === 'open' },
+          });
+          const where = m.taskId === task.id ? '' : ` on ${m.taskId}`;
+          if (m.status === 'answered') {
+            return `The owner already answered this as ${m.id}${where}: "${m.text}" → ${m.answer}\nUse that answer and continue. Do not ask it again.`;
+          }
+          return blocking
+            ? `This was already asked as ${m.id}${where} ("${m.text}") and is waiting for the owner. End your turn now; you will be resumed in this session with the answer.`
+            : `This was already asked as ${m.id}${where} and is not answered yet. Continue with your stated assumption.`;
+        }
+        const questionId = nextId(this.state, 'Q');
         this.deps.store.append({
           type: 'question.asked',
           actor,

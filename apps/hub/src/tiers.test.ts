@@ -97,7 +97,10 @@ describe('complexity tiers in the orchestrator', () => {
     expect(h.adapters['claude-1']!.calls[1]!.prompt).toContain('do not ask these again');
     const firstPlanAssumptions = h.store.list({ taskId: 'T-1' }).filter((e) => e.type === 'task.planned');
     expect(firstPlanAssumptions).toHaveLength(1);
-    expect(h.gateway.sent.some((s) => s.message.text.includes('📝 T-1 planned without asking'))).toBe(false); // second plan had none
+    // The first plan's assumptions (and the question over the cap) were shown with its question.
+    const shown = h.gateway.sent.filter((s) => s.message.text.startsWith('📝 T-1 planned without asking'));
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.message.text).toContain('Over the question limit, decide sensibly: Which region?');
   });
 
   it('records assumptions on the task and sends them to the owner', async () => {
