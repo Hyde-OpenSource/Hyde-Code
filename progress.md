@@ -18,6 +18,20 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-11-06: Skills for every agent (T-007)
+- **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **What:** New `packages/skills`: discovers SKILL.md folders (front matter `name`, `description`) from built-in (`packages/skills/builtin`, which ships `hyde-verify`), the user folder (`~/.hyde/skills`, next to the config), linked folders (`skills.folders` in the config) and the project (`<repo>/.hyde/skills`). Precedence is project > linked > user > built-in, and `skills.disabled` turns a skill off. Each run gets its task's skills copied into the folder its CLI reads (paths checked on the installed CLIs: Claude Code 2.1.318 `.claude/skills/`, OpenCode 1.19.0 `.opencode/skills/`, Codex 0.162.1 `.agents/skills/`). A copy the project already commits is left alone. Delivered folders are listed in a managed block of the repo's local `info/exclude`, so they are never committed. The planner names skills per subtask (`skills` in the plan schema, `task.skills_set` event); without a plan a run gets every enabled skill, since the CLIs only load a skill when its description fits. The owner changes a task's skills with `/skills T-n +name -name`, and `/skills` lists them. The task packet lists the skills with when to use each. New MCP tool `propose_skill` (name, description, body) creates S-n (`skill.proposed`). Nothing is written until the owner approves it (`/approve S-n` or a signed button), and then it is saved in `~/.hyde/skills/<name>` (`skill.decided`, `skill.written`). New dashboard Skills page lists skills with their source and projects, has an enable/disable toggle (config), shows SKILL.md, links and unlinks folders, and approves or discards proposals. Owner-only `GET /api/skills` and `/api/skills/:name`.
+- **Why:** docs/roadmap-v2.md section 2.
+- **Files:** packages/skills/** (new), packages/core/src/{events,projection,chat,commands,commands.test}.ts, packages/devflow/src/index.ts, packages/mcp-harness/src/{server,mcp.test}.ts, apps/hub/src/{orchestrator,planner,config,http,skills.test}.ts, apps/hub/package.json, apps/web/src/{main.tsx,api.ts,styles.css,pages/Skills.tsx}
+- **Verified:** `pnpm typecheck` clean, `pnpm test` 208/208. New tests: front matter parsing, precedence and invalid folders, the built-in skill, delivery per CLI that leaves project copies alone, the exclude block, refusing to overwrite or use a bad name; in the orchestrator, delivery plus packet plus never committing, the planner's choice plus the owner's change, propose → approve → saved; command parsing and signed skill buttons. Real runs on a scratch repo with a project skill `docs-style` (rule: end every Markdown file with "_Checked with the docs-style skill._"):
+  - Claude (`claude-code`, haiku, low tier) called its Skill tool for `docs-style` and `hyde-verify`, wrote docs/HOWTO.md ending with the marker, and committed only docs/HOWTO.md.
+  - OpenCode (`opencode/big-pickle`, free) loaded `docs-style` and `hyde-verify` from `.opencode/skills` with `--pure`, ended docs/TOOLS.md with the marker, and committed only that file.
+
+  Playwright screenshots of the Skills page at 1440 and 390 px look right.
+- **Cleanup:** scratch hub stopped; scratch repo, HYDE_HOME, screenshots and the two Claude session folders deleted; ~/.claude.json unchanged (28 projects). The OpenCode run left its session record in OpenCode's shared `~/.local/share/opencode/opencode.db`; I did not edit the owner's OpenCode database.
+- **Open / follow-ups:** Importing a skill from a git URL (show the licence and every file before approval) is not built. Only local folders can be linked. Codex delivery is tested by path only (no Codex runs in my role).
+
 ### 2026-11-06: End-to-end proof of tiers on real Claude runs, docs, and fixes it found (T-006)
 - **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
 - **Branch:** agent-hyde-autonomy/feature/smart-routing

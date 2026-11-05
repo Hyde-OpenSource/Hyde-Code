@@ -49,6 +49,19 @@ export function parseCommand(text: string): Command | null {
       const id = taskArg();
       return id ? { kind: 'retry', taskId: id } : { kind: 'help' };
     }
+    case 'skills': {
+      // /skills (list), /skills T-3 +browser -hyde-verify (change a task's skills)
+      if (!rest) return { kind: 'skills', add: [], remove: [] };
+      const m = /^(T-\d+)((?:\s+[+-][a-z0-9][a-z0-9-]*)*)\s*$/i.exec(rest);
+      if (!m) return { kind: 'help' };
+      const parts = m[2]!.trim().split(/\s+/).filter(Boolean);
+      return {
+        kind: 'skills',
+        taskId: m[1]!.toUpperCase(),
+        add: parts.filter((p) => p.startsWith('+')).map((p) => p.slice(1).toLowerCase()),
+        remove: parts.filter((p) => p.startsWith('-')).map((p) => p.slice(1).toLowerCase()),
+      };
+    }
     case 'level': {
       // /level T-3 high: the owner sets a task's complexity tier.
       const m = /^(T-\d+)\s+(trivial|low|medium|high)$/i.exec(rest);
@@ -71,6 +84,7 @@ export function parseCommand(text: string): Command | null {
     case 'deny': {
       if (/^A-\d+$/i.test(rest)) return { kind: 'decide', approvalId: rest.toUpperCase(), approved: name === 'approve' };
       if (/^L-\d+$/i.test(rest)) return { kind: 'lesson', lessonId: rest.toUpperCase(), approved: name === 'approve' };
+      if (/^S-\d+$/i.test(rest)) return { kind: 'skill', skillId: rest.toUpperCase(), approved: name === 'approve' };
       return { kind: 'help' };
     }
     default:
@@ -90,7 +104,8 @@ export const HELP_TEXT = [
   '/retry T-3: try a failed task again',
   '/level T-3 high: set a task\'s complexity (trivial, low, medium, high); its next run uses that tier',
   '/answer Q-2 <text>: answer a question (or tap a button, or reply to the question)',
-  '/approve A-1, /deny A-1: decide an approval (also L-1 for lessons)',
+  '/approve A-1, /deny A-1: decide an approval (also L-1 for lessons, S-1 for proposed skills)',
+  '/skills: list skills; /skills T-3 +name -name: change the skills a task gets',
   '/merge T-3: merge a finished task into its base branch (staging)',
   '/promote #project: open and merge staging → main (asks you to confirm)',
   '/projects: registered projects',
@@ -111,7 +126,9 @@ export function encodeAction(secret: string, action: ButtonAction): string {
         ? `d|${action.approvalId}|${action.approved ? 1 : 0}`
         : action.kind === 'merge'
           ? `m|${action.taskId}|1`
-          : `l|${action.lessonId}|${action.approved ? 1 : 0}`;
+          : action.kind === 'skill'
+            ? `s|${action.skillId}|${action.approved ? 1 : 0}`
+            : `l|${action.lessonId}|${action.approved ? 1 : 0}`;
   return `${payload}|${sign(secret, payload)}`;
 }
 
@@ -127,6 +144,7 @@ export function decodeAction(secret: string, data: string): ButtonAction | null 
   if (kind === 'd' && /^A-\d+$/.test(id) && (value === '0' || value === '1')) return { kind: 'decide', approvalId: id, approved: value === '1' };
   if (kind === 'm' && /^T-\d+$/.test(id) && value === '1') return { kind: 'merge', taskId: id };
   if (kind === 'l' && /^L-\d+$/.test(id) && (value === '0' || value === '1')) return { kind: 'lesson', lessonId: id, approved: value === '1' };
+  if (kind === 's' && /^S-\d+$/.test(id) && (value === '0' || value === '1')) return { kind: 'skill', skillId: id, approved: value === '1' };
   return null;
 }
 
@@ -141,6 +159,8 @@ export function actionToCommand(action: ButtonAction): Command {
       return { kind: 'merge', taskId: action.taskId };
     case 'lesson':
       return { kind: 'lesson', lessonId: action.lessonId, approved: action.approved };
+    case 'skill':
+      return { kind: 'skill', skillId: action.skillId, approved: action.approved };
   }
 }
 

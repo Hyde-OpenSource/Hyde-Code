@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -7,6 +7,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { COMPLEXITY_LEVELS, describeEvent, normalizeCommandText, parseCommand, snapshot, TOOLS_NAMES, type Command, type EventStore } from '@hyde/core';
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
+import { discoverSkills, SKILL_DIRS } from '@hyde/skills';
 import { getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
 import { tierTable, type AgentPool } from './agents.ts';
@@ -321,6 +322,28 @@ export function createApi(deps: ApiDeps): Hono {
         ...(e.type === 'task.created' && { source: (e.payload as { source: { kind: string } }).source.kind }),
       })),
     );
+  });
+
+  // Skills (owner): every skill per project, where it comes from, which CLIs get it, and its SKILL.md.
+  app.get('/api/skills', owner, (c) => {
+    const byName = new Map<string, { name: string; description: string; source: string; files: string[]; projects: string[]; enabled: boolean }>();
+    for (const p of config.projects) {
+      for (const s of discoverSkills({ user: orchestrator.userSkillsDir, project: join(p.path, '.hyde', 'skills'), folders: config.skills.folders })) {
+        const row = byName.get(s.name) ?? { name: s.name, description: s.description, source: s.source, files: s.files, projects: [], enabled: !config.skills.disabled.includes(s.name) };
+        row.projects.push(p.id);
+        byName.set(s.name, row);
+      }
+    }
+    return c.json({ skills: [...byName.values()], clis: SKILL_DIRS, proposals: [...orchestrator.state.skillProposals.values()], folders: config.skills.folders, disabled: config.skills.disabled });
+  });
+
+  app.get('/api/skills/:name', owner, (c) => {
+    const name = c.req.param('name') ?? '';
+    for (const p of config.projects) {
+      const s = discoverSkills({ user: orchestrator.userSkillsDir, project: join(p.path, '.hyde', 'skills'), folders: config.skills.folders }).find((x) => x.name === name);
+      if (s) return c.json({ name: s.name, source: s.source, dir: s.dir, files: s.files, text: readFileSync(join(s.dir, 'SKILL.md'), 'utf8') });
+    }
+    return c.json({ error: `No skill ${name}`, code: 'not_found' }, 404);
   });
 
   app.get('/api/config', owner, (c) => c.json(readRawConfig(config.configFile)));

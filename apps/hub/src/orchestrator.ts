@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   ADAPTER_MAX_EFFORT,
   apply,
@@ -47,6 +47,8 @@ import type { Notifier } from './notifier.ts';
 import { checkPlan, CLASSIFY_SCHEMA, classifyPrompt, HARNESS_MODE_LINE, parseClassification, PLAN_SCHEMA, plannerPrompt } from './planner.ts';
 import { decide as decidePolicy, hookResponse } from './policy-engine.ts';
 import { blockingFindings, parseReview, REVIEW_SCHEMA, reviewFixPrompt, reviewPrompt } from './review.ts';
+import { deliverSkills, discoverSkills, isSkillName, withExcludes, writeSkill, type Skill } from '@hyde/skills';
+import { existsSync, readFileSync } from 'node:fs';
 import { findMatch, questionOf } from './questions.ts';
 import { readWorkflow, renderTemplate, type Workflow } from './workflow.ts';
 
@@ -385,6 +387,8 @@ export class Orchestrator {
     const adapter = this.deps.pool.adapter(agent);
 
     const packetFile = join(runDir, 'packet.md');
+    const skills = readOnly ? [] : this.taskSkills(this.state.tasks.get(task.id)!, project);
+    if (skills.length && profile.node === 'local') this.deliver(skills, this.state.tasks.get(task.id)!.worktree!, profile.adapter);
     if (!readOnly) {
       writeFileSync(
         packetFile,
@@ -395,6 +399,7 @@ export class Orchestrator {
           model: routedRun.model ?? profile.model ?? 'default model',
           ...(routedRun.tier && { tier: routedRun.tier }),
           checks: project.checks,
+          skills: skills.map((s) => ({ name: s.name, description: s.description })),
           branch: task.branch!,
           baseBranch: task.baseBranch!,
           projectName: project.name ?? project.id,
@@ -493,6 +498,7 @@ export class Orchestrator {
           decisions: memory.decisions.map((q) => ({ q: q.text, a: q.answer!, taskId: q.taskId })),
           client: task.kind === 'client',
           maxQuestions: this.config.planner.maxQuestions,
+          skills: this.skills(this.project(task.projectId)).map((s) => ({ name: s.name, description: s.description })),
           ...(task.complexity && { guess: { level: task.complexity.level, reason: task.complexity.reason } }),
         }),
       };
@@ -791,6 +797,82 @@ export class Orchestrator {
     });
   }
 
+  // ---------------------------------------------------------------- skills
+
+  /** Where approved skills go: the user's skill folder next to the config (~/.hyde/skills). */
+  get userSkillsDir(): string {
+    return join(this.config.configDir, 'skills');
+  }
+
+  /** Every enabled skill for a project: project > linked folders > user > built-in. */
+  skills(project: ProjectConfig): Skill[] {
+    return discoverSkills({ user: this.userSkillsDir, project: join(project.path, '.hyde', 'skills'), folders: this.config.skills.folders }).filter(
+      (s) => !this.config.skills.disabled.includes(s.name),
+    );
+  }
+
+  /** A task's skills: its own list, its parent's, or every enabled skill. */
+  private taskSkills(task: TaskView, project: ProjectConfig): Skill[] {
+    const chosen = task.skills ?? (task.parentId ? this.state.tasks.get(task.parentId)?.skills : undefined);
+    const all = this.skills(project);
+    return chosen ? all.filter((s) => chosen.includes(s.name)) : all;
+  }
+
+  private setSkills(task: TaskView, skills: string[], by: string): void {
+    const clean = [...new Set(skills.map((s) => s.toLowerCase()).filter(isSkillName))].sort();
+    this.append({ type: 'task.skills_set', taskId: task.id, payload: { taskId: task.id, skills: clean, by } });
+  }
+
+  /** Copies the skills into the worktree for the CLI and keeps them out of commits (local info/exclude). */
+  private deliver(skills: Skill[], worktree: string, adapter: string): void {
+    try {
+      const written = deliverSkills(skills, worktree, adapter);
+      if (!written.length) return;
+      const gitFile = join(worktree, '.git');
+      // A worktree's .git file points at .git/worktrees/<name>; info/exclude lives in the common dir.
+      const gitDir = existsSync(gitFile) && !readFileSync(gitFile, 'utf8').startsWith('gitdir:') ? gitFile : resolve(worktree, readFileSync(gitFile, 'utf8').slice(8).trim(), '..', '..');
+      const file = join(gitDir, 'info', 'exclude');
+      mkdirSync(dirname(file), { recursive: true });
+      const next = withExcludes(existsSync(file) ? readFileSync(file, 'utf8') : '', written);
+      if (next !== null) writeFileSync(file, next);
+    } catch (err) {
+      this.log(`skills: could not deliver to ${worktree}: ${(err as Error).message}`);
+    }
+  }
+
+  private skillsCommand(command: { taskId?: string; add: string[]; remove: string[] }, inbound: Inbound, actor: Actor): string {
+    if (!command.taskId) {
+      const lines = this.config.projects.flatMap((p) => this.skills(p).map((s) => `${s.name} (${s.source}${this.config.projects.length > 1 ? `, #${p.id}` : ''}): ${s.description}`));
+      const proposed = [...this.state.skillProposals.values()].filter((s) => s.status === 'proposed').map((s) => `${s.id} proposed by ${s.by}: ${s.name}. /approve ${s.id} or /deny ${s.id}`);
+      return [...new Set(lines)].concat(proposed).join('\n') || 'No skills yet.';
+    }
+    const task = this.state.tasks.get(command.taskId);
+    if (!task) return `No task ${command.taskId}.`;
+    const available = this.skills(this.project(task.projectId)).map((s) => s.name);
+    const unknown = command.add.filter((n) => !available.includes(n));
+    if (unknown.length) return `Unknown skill(s): ${unknown.join(', ')}. Skills: ${available.join(', ') || 'none'}.`;
+    const current = this.taskSkills(task, this.project(task.projectId)).map((s) => s.name);
+    const next = [...new Set([...current.filter((n) => !command.remove.includes(n)), ...command.add])].sort();
+    this.deps.store.append({ type: 'task.skills_set', actor, taskId: task.id, commandId: inbound.commandId, payload: { taskId: task.id, skills: next, by: inbound.userId } });
+    return `${task.id} skills: ${next.join(', ') || 'none'}. The next run gets them.`;
+  }
+
+  private decideSkill(skillId: string, approved: boolean, inbound: Inbound, actor: Actor): string {
+    const s = this.state.skillProposals.get(skillId);
+    if (!s) return `No skill proposal ${skillId}.`;
+    if (s.status !== 'proposed') return `${s.id} was already ${s.status}.`;
+    const recorded = this.deps.store.append({ type: 'skill.decided', actor, commandId: inbound.commandId, ...(s.taskId && { taskId: s.taskId }), payload: { skillId, approved, by: inbound.userId } });
+    if (!recorded) return 'Already received.';
+    if (!approved) return `${s.id} discarded.`;
+    try {
+      const path = writeSkill(this.userSkillsDir, s);
+      this.append({ type: 'skill.written', payload: { skillId, path } });
+      return `${s.id} saved as skill ${s.name} in ${path}. Agents get it from the next run.`;
+    } catch (err) {
+      return `${s.id} approved but not saved: ${(err as Error).message}`;
+    }
+  }
+
   /** Plan runs of this task that gave no usable plan (failed, unparsed or rejected). */
   private failedPlanRuns(task: TaskView, stalledRun?: string): RunView[] {
     return task.runIds
@@ -927,6 +1009,7 @@ export class Orchestrator {
         },
       });
       if (only?.complexity && !plan.complexity && task.complexity?.by !== 'owner') this.classified(task, only.complexity, 'planner', `planned by ${run.agent}`);
+      if (only?.skills && task.skills === undefined) this.setSkills(task, only.skills, `planner ${run.agent}`);
       this.setStatus(task, 'ready', 'planned as one task');
       if (assumptions.length) await this.notifyAssumptions(task, assumptions);
       return;
@@ -960,6 +1043,7 @@ export class Orchestrator {
       });
     }
     this.append({ type: 'task.planned', taskId: task.id, payload: { taskId: task.id, runId, children: [...ids.values()], assumptions } });
+    for (const t of plan.tasks) if (t.skills) this.setSkills(this.state.tasks.get(ids.get(t.key)!)!, t.skills, `planner ${run.agent}`);
     for (const id of ids.values()) {
       const child = this.state.tasks.get(id)!;
       if (!child.complexity) this.classifyNew(child);
@@ -1357,6 +1441,10 @@ export class Orchestrator {
         void this.tick();
         return `${task.id} will run again.`;
       }
+      case 'skills':
+        return this.skillsCommand(command, inbound, actor);
+      case 'skill':
+        return this.decideSkill(command.skillId, command.approved, inbound, actor);
       case 'level': {
         const task = this.state.tasks.get(command.taskId);
         if (!task) return `No task ${command.taskId}.`;
@@ -1790,6 +1878,21 @@ export class Orchestrator {
         const approvalId = this.requestApproval(task, kind, summary, typeof args.command === 'string' ? { command: args.command } : undefined);
         await this.notifyApproval(task, approvalId, `${run.agent} asks (${kind}): ${summary}${args.command ? `\n$ ${args.command}` : ''}`);
         return `Recorded as ${approvalId} and sent to the owner. End your turn now; you will be resumed with the decision.`;
+      }
+      case 'propose_skill': {
+        const name = String(args.name ?? '').trim().toLowerCase();
+        const description = String(args.description ?? '').replace(/\s+/g, ' ').trim();
+        const body = String(args.body ?? '').trim();
+        if (!isSkillName(name)) throw new Error('name must be lower-case letters, digits and dashes (e.g. "run-e2e-tests")');
+        if (description.length < 10 || body.length < 20) throw new Error('give a description (when to use it) and a body (the steps)');
+        if (this.skills(this.project(task.projectId)).some((s) => s.name === name)) return `A skill named ${name} already exists; propose a different name or a lesson instead.`;
+        const skillId = nextId(this.state, 'S');
+        this.deps.store.append({ type: 'skill.proposed', actor, taskId: task.id, payload: { skillId, taskId: task.id, name, description, body, by: run.agent } });
+        await this.notifyTask(task, {
+          text: `🧩 ${skillId} skill proposed by ${run.agent}: ${name}\n${description}\n\n/approve ${skillId} saves it to your skills; /deny ${skillId} drops it.`,
+          buttons: [[{ label: 'Save skill', action: { kind: 'skill', skillId, approved: true } }, { label: 'Discard', action: { kind: 'skill', skillId, approved: false } }]],
+        });
+        return `Recorded as ${skillId}; the owner decides whether it becomes a skill.`;
       }
       case 'propose_lesson': {
         const lessonId = nextId(this.state, 'L');

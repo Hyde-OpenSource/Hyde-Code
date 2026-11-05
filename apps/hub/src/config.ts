@@ -169,6 +169,14 @@ const configSchema = z.object({
       publicUrl: z.string().url().optional(),
     })
     .default({ enabled: false }),
+  skills: z
+    .object({
+      /** Skill names never given to agents. */
+      disabled: z.array(z.string()).default([]),
+      /** Extra folders of skills (each skill in its own sub-folder with a SKILL.md), e.g. a devflow-skills clone. */
+      folders: z.array(z.string()).default([]),
+    })
+    .default({ disabled: [], folders: [] }),
   /** Plugin modules exporting `register(registries)`. */
   plugins: z.array(z.string()).default([]),
   projects: z.array(projectSchema).min(1),

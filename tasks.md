@@ -102,11 +102,12 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO (start after T-006)
+- **Status:** DONE (git URL import not built)
 - **Priority:** medium
 - **Files / area:** packages/skills (new), apps/hub/**, packages/mcp-harness/**, packages/devflow/**, apps/web (Skills page)
 - **Done when:** docs/roadmap-v2.md section 2 is built: SKILL.md discovery from built-in, user and project folders; per-run delivery into each CLI's real skill folder (paths checked against the installed CLI versions); planner picks skills per task; propose_skill tool with owner approval; Skills page; tests and a real run showing a Claude and an OpenCode run each using a project skill.
 - **Notes:**
+  - 2026-11-06: Skills package, delivery per CLI, planner choice, propose_skill with approval, Skills page. Real Claude and OpenCode runs each used a project skill. Not built: importing from a git URL.
 
 ## T-008: Live browser feed with cursor and click overlay
 - **Assigned to:** agent-hyde-autonomy

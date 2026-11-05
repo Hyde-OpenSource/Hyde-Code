@@ -229,6 +229,9 @@ importers:
       '@hyde/policy':
         specifier: workspace:*
         version: link:../../packages/policy
+      '@hyde/skills':
+        specifier: workspace:*
+        version: link:../../packages/skills
       '@hyde/workspace':
         specifier: workspace:*
         version: link:../../packages/workspace
@@ -429,6 +432,8 @@ importers:
         version: 4.6.6
 
   packages/policy: {}
+
+  packages/skills: {}
 
   packages/workspace:
     devDependencies:

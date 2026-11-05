@@ -7,6 +7,7 @@ import { Board } from './pages/Board.tsx';
 import { Inbox, inboxCount } from './pages/Inbox.tsx';
 import { Office } from './pages/Office.tsx';
 import { Settings } from './pages/Settings.tsx';
+import { Skills } from './pages/Skills.tsx';
 import { TaskPage } from './pages/TaskPage.tsx';
 import { Usage } from './pages/Usage.tsx';
 import { Toast } from './ui.tsx';
@@ -22,6 +23,7 @@ const PAGES = [
   ['inbox', 'Inbox'],
   ['usage', 'Usage'],
   ['audit', 'Audit'],
+  ['skills', 'Skills'],
   ['settings', 'Settings'],
 ] as const;
 
@@ -161,6 +163,8 @@ function App() {
           <Usage {...ctx} />
         ) : current === 'audit' ? (
           <Audit {...ctx} />
+        ) : current === 'skills' ? (
+          <Skills {...ctx} />
         ) : current === 'settings' ? (
           <Settings {...ctx} />
         ) : (

@@ -73,3 +73,22 @@ describe('signed callback data', () => {
     expect(decodeAction(secret, 'garbage')).toBeNull();
   });
 });
+
+describe('skill and tier commands', () => {
+  it('parses /skills, /approve S-n and /level', () => {
+    expect(parseCommand('/skills')).toEqual({ kind: 'skills', add: [], remove: [] });
+    expect(parseCommand('/skills t-3 +deploy-notes -Hyde-Verify')).toEqual({ kind: 'skills', taskId: 'T-3', add: ['deploy-notes'], remove: ['hyde-verify'] });
+    expect(parseCommand('/skills T-3 deploy')).toEqual({ kind: 'help' });
+    expect(parseCommand('/approve s-2')).toEqual({ kind: 'skill', skillId: 'S-2', approved: true });
+    expect(parseCommand('/deny S-2')).toEqual({ kind: 'skill', skillId: 'S-2', approved: false });
+    expect(parseCommand('/level T-4 High')).toEqual({ kind: 'level', taskId: 'T-4', level: 'high' });
+    expect(parseCommand('/level T-4 huge')).toEqual({ kind: 'help' });
+  });
+
+  it('signs skill buttons', () => {
+    const data = encodeAction('secret', { kind: 'skill', skillId: 'S-7', approved: true });
+    expect(decodeAction('secret', data)).toEqual({ kind: 'skill', skillId: 'S-7', approved: true });
+    expect(decodeAction('other', data)).toBeNull();
+    expect(actionToCommand({ kind: 'skill', skillId: 'S-7', approved: false })).toEqual({ kind: 'skill', skillId: 'S-7', approved: false });
+  });
+});

@@ -4,7 +4,7 @@ import { z } from 'zod';
 // The tools every agent uses to talk to the harness (docs/plan.md: "Give every worker a
 // harness MCP server"). Unattended runs have no AskUserQuestion, so ask_question is the way in.
 
-export const TOOLS = ['ask_question', 'report_progress', 'complete_task', 'request_approval', 'propose_lesson'] as const;
+export const TOOLS = ['ask_question', 'report_progress', 'complete_task', 'request_approval', 'propose_lesson', 'propose_skill'] as const;
 export type HubCall = (tool: (typeof TOOLS)[number], args: unknown) => Promise<string>;
 
 export function createHarnessServer(call: HubCall): McpServer {
@@ -83,6 +83,21 @@ export function createHarnessServer(call: HubCall): McpServer {
       inputSchema: { text: z.string().min(10).max(300).describe('The lesson as a rule, e.g. "Run migrations before seeding"') },
     },
     (args) => reply('propose_lesson', args),
+  );
+
+  server.registerTool(
+    'propose_skill',
+    {
+      description:
+        'Propose a reusable skill (a SKILL.md other agents can load): a procedure you worked out that will be needed again, ' +
+        'e.g. how to run this repo\'s end-to-end tests. The owner approves it before it is saved. Use propose_lesson for one-line rules.',
+      inputSchema: {
+        name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/).describe('Folder name, lower-case with dashes, e.g. "run-e2e-tests"'),
+        description: z.string().min(10).max(300).describe('When an agent should use it (this is what decides whether it gets loaded)'),
+        body: z.string().min(20).max(20_000).describe('The skill itself, in Markdown: steps, commands, pitfalls'),
+      },
+    },
+    (args) => reply('propose_skill', args),
   );
 
   return server;

@@ -240,6 +240,12 @@ export const eventPayloads = {
     decision: z.enum(['allow', 'deny', 'approval']),
     rule: z.string(),
   }),
+  /** The skills a task's runs get (planner choice or the owner's change). */
+  'task.skills_set': z.object({ taskId: z.string(), skills: z.array(z.string()), by: z.string() }),
+  /** An agent proposes a new skill; nothing is saved until the owner approves. */
+  'skill.proposed': z.object({ skillId: z.string(), taskId: z.string().optional(), name: z.string(), description: z.string(), body: z.string(), by: z.string() }),
+  'skill.decided': z.object({ skillId: z.string(), approved: z.boolean(), by: z.string() }),
+  'skill.written': z.object({ skillId: z.string(), path: z.string() }),
   'lesson.proposed': z.object({ lessonId: z.string(), taskId: z.string().optional(), text: z.string(), by: z.string() }),
   'lesson.decided': z.object({ lessonId: z.string(), approved: z.boolean(), by: z.string() }),
   'lesson.written': z.object({ lessonId: z.string(), taskId: z.string() }),

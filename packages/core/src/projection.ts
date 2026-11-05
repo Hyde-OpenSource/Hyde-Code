@@ -35,6 +35,8 @@ export interface TaskView {
   waiting?: string;
   /** Planner assumptions the owner can see and change. */
   assumptions: string[];
+  /** Skills chosen for this task; undefined means every enabled skill. */
+  skills?: string[];
   /** Agent profile that owns the worktree. */
   agent?: string;
   /** Seq of the latest workspace assignment (runs after it belong to the current agent). */
@@ -158,6 +160,17 @@ export interface LessonView {
   writtenIn?: string;
 }
 
+export interface SkillProposalView {
+  id: string;
+  taskId?: string;
+  name: string;
+  description: string;
+  body: string;
+  by: string;
+  status: 'proposed' | 'approved' | 'rejected';
+  path?: string;
+}
+
 export interface NodeView {
   id: string;
   owner: string;
@@ -178,6 +191,7 @@ export interface HarnessState {
   quotas: Map<string, QuotaView>;
   artifacts: Map<string, ArtifactView>;
   lessons: Map<string, LessonView>;
+  skillProposals: Map<string, SkillProposalView>;
   nodes: Map<string, NodeView>;
   policy: { allow: number; deny: number; approval: number };
 }
@@ -193,6 +207,7 @@ export function emptyState(): HarnessState {
     quotas: new Map(),
     artifacts: new Map(),
     lessons: new Map(),
+    skillProposals: new Map(),
     nodes: new Map(),
     policy: { allow: 0, deny: 0, approval: 0 },
   };
@@ -274,6 +289,26 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
       const { level, by, reason, confident } = record.payload;
       task.complexity = { level, by, reason, confident, seq: record.seq };
       task.complexityHistory.push({ level, by, reason, seq: record.seq });
+      break;
+    }
+    case 'task.skills_set': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.skills = record.payload.skills;
+      break;
+    }
+    case 'skill.proposed': {
+      const p = record.payload;
+      state.skillProposals.set(p.skillId, { id: p.skillId, name: p.name, description: p.description, body: p.body, by: p.by, status: 'proposed', ...(p.taskId && { taskId: p.taskId }) });
+      break;
+    }
+    case 'skill.decided': {
+      const s = state.skillProposals.get(record.payload.skillId);
+      if (s) s.status = record.payload.approved ? 'approved' : 'rejected';
+      break;
+    }
+    case 'skill.written': {
+      const s = state.skillProposals.get(record.payload.skillId);
+      if (s) s.path = record.payload.path;
       break;
     }
     case 'task.waiting': {
@@ -547,6 +582,7 @@ const ID_MAPS = {
   run: 'runs',
   art: 'artifacts',
   L: 'lessons',
+  S: 'skillProposals',
 } as const;
 
 /** Next human-friendly id with a prefix: T-1, Q-1, A-1, R-1, run-1, art-1, L-1. */
@@ -572,6 +608,7 @@ export function snapshot(state: HarnessState) {
     quotas: [...state.quotas.values()],
     artifacts: [...state.artifacts.values()],
     lessons: [...state.lessons.values()],
+    skillProposals: [...state.skillProposals.values()],
     nodes: [...state.nodes.values()],
     policy: state.policy,
   };

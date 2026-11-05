@@ -35,6 +35,14 @@ export type HubState = StateSnapshot & {
   stages: { planner: boolean; review: boolean; browser: boolean; policy: boolean };
 };
 
+export interface SkillsInfo {
+  skills: { name: string; description: string; source: string; files: string[]; projects: string[]; enabled: boolean }[];
+  clis: Record<string, string>;
+  proposals: { id: string; taskId?: string; name: string; description: string; body: string; by: string; status: string; path?: string }[];
+  folders: string[];
+  disabled: string[];
+}
+
 export class AuthError extends Error {}
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -53,6 +61,8 @@ export const api = {
   taskEvents: (id: string) => call<(FeedEvent & { payload: any })[]>(`/api/tasks/${id}/events`),
   diff: (id: string) => call<string>(`/api/tasks/${id}/diff`),
   config: () => call<Record<string, any>>('/api/config'),
+  skills: () => call<SkillsInfo>('/api/skills'),
+  skill: (name: string) => call<{ name: string; source: string; dir: string; files: string[]; text: string }>(`/api/skills/${encodeURIComponent(name)}`),
   saveConfig: (raw: unknown) => call<{ ok: boolean }>('/api/config', { method: 'PUT', body: JSON.stringify(raw) }),
   detect: () =>
     call<{ id: string; label: string; kind: string; installed: boolean; signedIn: boolean; version?: string; account?: string; problem?: string; howTo?: string; suggest?: Record<string, any> }[]>('/api/setup/detect'),

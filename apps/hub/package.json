@@ -28,6 +28,7 @@
     "@hyde/mcp-harness": "workspace:*",
     "@hyde/node": "workspace:*",
     "@hyde/policy": "workspace:*",
+    "@hyde/skills": "workspace:*",
     "@hyde/workspace": "workspace:*",
     "croner": "10.0.1",
     "hono": "4.13.13",

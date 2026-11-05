@@ -23,6 +23,8 @@ export interface PacketInput {
   tier?: 'trivial' | 'low' | 'medium' | 'high';
   /** Commands the harness runs after complete_task. */
   checks?: string[];
+  /** Skills copied into this worktree for the agent's CLI. */
+  skills?: { name: string; description: string }[];
   /** False when the agent's sandbox can't write .git; the harness commits for it. */
   canCommit?: boolean;
   /** Rendered WORKFLOW.md body from the repo, if any. */
@@ -73,6 +75,11 @@ export function buildTaskPacket(input: PacketInput): string {
     '- Need the owner to approve something (a new dependency, a scope change, a destructive step)? Call `request_approval` and end your turn.',
     '- Learned something future agents should know? Call `propose_lesson`.',
   ];
+  if (input.skills?.length) {
+    lines.push('', '## Skills for this task', 'Your CLI has these skills installed for this run. Use one when its description fits:');
+    for (const s of input.skills) lines.push(`- **${s.name}**: ${s.description}`);
+    lines.push('Learned a repeatable procedure future agents should follow? Propose it with `propose_skill`; the owner decides.');
+  }
   if (input.workflow) lines.push('', '## Project workflow (WORKFLOW.md)', input.workflow);
   if (input.answers.length) {
     lines.push('', '## Earlier answers from the owner (never ask these again)');

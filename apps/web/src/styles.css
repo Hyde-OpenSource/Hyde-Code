@@ -295,3 +295,4 @@ main.office-main { height: calc(100vh - var(--topbar-h)); }
 .tier-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 9em); gap: 6px; align-items: center; margin-bottom: 4px; }
 .tier-row .tier-name { font-size: 13px; }
 .tier-row input, .tier-row select { min-width: 0; width: 100%; }
+.skill-text { white-space: pre-wrap; max-height: 320px; overflow: auto; }
