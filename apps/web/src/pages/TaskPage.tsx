@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { sourceLabel } from '@hyde/core/office';
 import { ago, api } from '../api.ts';
 import { CommandButton, Status, type PageProps } from '../ui.tsx';
 
@@ -86,6 +87,7 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
             <Status status={task.status} />
             {task.blockedBy && <span className="badge warn">waiting on {task.blockedBy.id}</span>}
             <span>#{task.projectId}</span>
+            <span>· from {sourceLabel(task.source.kind)}</span>
             {task.agent && <span>· {task.agent}</span>}
             {task.branch && <span className="mono">· {task.branch}</span>}
             {task.parentId && (

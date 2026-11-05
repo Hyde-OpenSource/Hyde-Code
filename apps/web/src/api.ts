@@ -60,7 +60,7 @@ export const api = {
   projectList: () => call<{ projects: { id: string; name: string; path: string }[]; terms: { version: string; url: string } }>('/api/projects'),
   addProject: (path: string) => call<{ added: boolean; project: { id: string; name: string; path: string } }>('/api/projects', { method: 'POST', body: JSON.stringify({ path, trust: true }) }),
   removeProject: (id: string) => call<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  audit: () => call<{ seq: number; ts: string; type: string; actor: { kind: string; id: string }; taskId?: string; runId?: string }[]>('/api/audit'),
+  audit: () => call<{ seq: number; ts: string; type: string; actor: { kind: string; id: string }; taskId?: string; runId?: string; source?: string }[]>('/api/audit'),
 };
 
 const listeners = new Set<(e: FeedEvent) => void>();

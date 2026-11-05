@@ -35,6 +35,7 @@
 - `packages/adapters/claude-code/`: Claude Code adapter; `src/fixtures/` has sanitized recorded streams from CLI 2.1.310 and a fake `claude` binary for tests.
 - `packages/workspace/`, `packages/policy/`, `packages/devflow/`, `packages/mcp-harness/`, `packages/gateways/telegram/`: see README.
 - `.hyde/` (gitignored, runtime): `events.db`, `worktrees/`, `runs/`, `owner-token`, `callback-secret`, `telegram-paired.json`.
+- Client API for local apps (Hyde AI): `docs/api.md`. Client tokens in `<dataDir>/clients/<name>.token` (`apps/hub/src/clients.ts`); the running hub writes `~/.hyde/hub.json`. API version in `apps/hub/src/version.ts`.
 
 ## 5. How to run, build, test
 - **Install:** `corepack enable pnpm && pnpm install`

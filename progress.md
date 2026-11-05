@@ -6,6 +6,27 @@
 ## How to write an entry
 
 ```markdown
+### YYYY-MM-DD: <short title>
+- **Agent:** <name> (<model>)
+- **Branch:** <branch>
+- **What:** <what changed>
+- **Why:** <reason / request it came from>
+- **Files:** <paths>
+- **Verified:** <how it was tested, result>
+- **Open / follow-ups:** <anything left, or "none">
+```
+
+## Log
+<!-- New entries go directly below this line, newest first. -->
+### 2026-11-05: Merge the hub client API v1 into the combined repo (T-001)
+- **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
+- **Branch:** agent-hyde-autonomy/feature/smart-routing (from feature/hyde-ai fdd709f)
+- **What:** Merged `agent-hydeai-api/feature/hyde-ai-api` (24509e2: typed `/api/tasks`, answers, approvals, `/api/summary`, client token, `hub.json`, docs/api.md) with a normal local merge. Only agents.md conflicted (kept both registries and both logs). progress.md auto-merged; two 2026-10-30 entries that had landed inside the "How to write an entry" template block were moved under "Log" unchanged.
+- **Why:** Owner wants one combined project; the desktop app already uses API v1 and needed the hub side.
+- **Files:** merge of 20 files (apps/hub/src/{client-api.test,clients,home,http,main,orchestrator,summary,version}.ts, apps/web/src/**, packages/core/src/{events,office}.ts, docs/api.md, README.md, context.md), agents.md, progress.md
+- **Verified:** `pnpm typecheck` clean, `pnpm test` 149/149, `pnpm desktop:test` 18/18. Every path in `hydecode.rs` (`/api/health`, `/api/tasks`, `/api/questions/:id/answer`, `/api/approvals/:id`, `/api/summary`, `/api/state`, `/api/events`, `/api/commands`) exists in the merged `http.ts`; hub code after the merge equals 24509e2 except the `hyde ai` CLI subcommand, so the 2026-10-30 desktop end-to-end check still applies.
+- **Open / follow-ups:** none
+
 ### 2026-10-30: Desktop app uses the hub client API v1 (typed tasks, client token, summary, notifications)
 - **Agent:** hyde-agent-25 (Claude Opus 5.5, claude-opus-5-5)
 - **Branch:** feature/hyde-ai
@@ -32,18 +53,15 @@
 - **Verified:** `pnpm typecheck` clean, `pnpm test` 134/134, `pnpm desktop:test` 16/16, clippy `-D warnings` and rustfmt clean. `hyde ai doctor` and `hyde ai run help` pass through, and with `hyde-ai` missing it prints the build hint. The desktop ↔ hub bridge was exercised against a mock hub (`/new … #project @agent`, `/approve`, `/answer`, status summary); no run on the real hub, to save agent quota.
 - **Open / follow-ups:** Not pushed; owner to review and merge `feature/hyde-ai` into staging. The GitHub repo is still named Hyde-Code (rename later if wanted). The old `E:/PROJECTS 2/Hyde Agent` folder still exists; delete it once this branch is merged. Roadmap P0 items in docs/HYDE_AI.md §4.
 
-### YYYY-MM-DD: <short title>
-- **Agent:** <name> (<model>)
-- **Branch:** <branch>
-- **What:** <what changed>
-- **Why:** <reason / request it came from>
-- **Files:** <paths>
-- **Verified:** <how it was tested, result>
-- **Open / follow-ups:** <anything left, or "none">
-```
+### 2026-10-30: Client API for Hyde AI (typed tasks, answers, approvals, summary, client token, hub.json)
+- **Agent:** agent-hydeai-api (Claude Opus 5.5, claude-opus-5-5), child session
+- **Branch:** agent-hydeai-api/feature/hyde-ai-api (from feature/md-office a915f97)
+- **What:** Built the hub side of the roadmap hyde-agent-25 proposed for Hyde AI (docs/api.md has the full contract). (1) `POST /api/tasks {text, project?, agent?, source?, requestId?}` returns `{id, status, projectId, title, text}` (201); errors carry a `code`; a repeated `requestId` returns 409. (2) `GET /api/health` returns `{ok, version, apiVersion}` (apiVersion 1, version from apps/hub/package.json). (3) The hub writes `~/.hyde/hub.json` `{url, pid, version, apiVersion, dataDir, startedAt}` on start and removes it on stop; `readHubInfo` ignores a stale file. (4) Client token `<dataDir>/clients/hyde-ai.token` (0600, created at start): reads state, summary, events, feed, task events and diff; creates tasks; answers; approves or denies (not `promote` approvals); runs /new /answer /approve /deny /stop /retry /merge and the read-only chat commands. Not config, projects, trust, /promote, lessons, /client, audit, metrics or dashboard login. Actor is `client:hyde-ai`. (5) New task source `hyde-ai`, shown on the task page ("from Hyde AI"), board badge, office kanban card and the audit log (`source` on task.created rows). (6) `GET /api/summary[?project=]`: counts, the "needs you" list (questions, approvals, PRs to merge, skipping finished tasks) and (11) per-agent quota headroom (`percent`, `nearCeiling`, `blocked`, `resetsAt`). (7) `POST /api/questions/:id/answer {text|option}` and `POST /api/approvals/:id {decision}` with 404/409/403 codes. (8) SSE documented; `/api/events` now also honours `Last-Event-ID` on reconnect. (9) Projects match by id or name ignoring case, spaces, `-`, `_`, `.` (chat `#tags` too); ambiguous matches are refused. (10) Tasks from Hyde AI always go to the planner's clarify step when a usable agent has the plan role, even with the planner off; otherwise they start normally and the reply says so.
+- **Why:** hyde-agent-25's proposal (owner request "make HYDE AI; guide Hyde Code how to improve"). Owner chose all of P0-P2, one branch off md-office, client token also allowed stop/retry/merge, and "plan anyway if a planner agent exists".
+- **Files:** apps/hub/src/http.ts, orchestrator.ts, main.ts, home.ts, clients.ts (new), summary.ts (new), version.ts (new), client-api.test.ts (new); packages/core/src/events.ts, office.ts; apps/web/src/api.ts, pages/TaskPage.tsx, Board.tsx, Office.tsx, Audit.tsx; docs/api.md (new); README.md
+- **Verified:** `pnpm typecheck` clean; `pnpm test` 149 passing (15 new: health shape, typed task create with source and actor, owner source choice, requestId dedupe, loose project names and ambiguity, typed answer/approve with 400/404/409, summary counts and quota, client token allow/deny lists, promote approvals refused, token file 0600, voice planning with and without a plan-role agent, hub.json stale detection). Ran the real hub on a scratch HYDE_HOME (port 7499, one harmless `command` agent running `true`, no CLI quota used): health, hub.json, 0600 client token, POST /api/tasks with "Gamify IAS LMS" → T-1 clarifying with the planner off, 409 on repeat, 401 on /api/config, 403 on /promote, summary, SSE replay with `after` and `Last-Event-ID`, audit `source: hyde-ai`; SIGTERM removed hub.json. Playwright screenshots (1440 and 390 px) of the task page, board and audit: "from Hyde AI" and the board badge show, no console errors. Scratch home, repo and screenshots deleted.
+- **Open / follow-ups:** Item 12 (`hyde ai` subcommand) was not built here: hyde-agent-25 already added it on branch feature/hyde-ai (worktree /mnt/NewVolume/D/PROJECTS/HYDE AI), so building it again would only conflict. That branch and this one will conflict in README.md and progress.md when both reach staging. Hyde AI must switch to the new endpoints (told hyde-agent-25). Suggested lesson: bump API_VERSION and update docs/api.md on any breaking change to the client API.
 
-## Log
-<!-- New entries go directly below this line, newest first. -->
 ### 2026-10-29: `hyde` command, trusted folders and terms, projects in the GUI
 - **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
 - **Branch:** feature/md-office

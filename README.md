@@ -182,6 +182,9 @@ accept `hyde new …` and `!new …`.
 - **Containers**: `"isolation": "container"` with `container.image` runs an agent in Docker; sign in
   once inside its home volume.
 - **Plugins**: `plugins: ["./my-plugin.ts"]`, exporting `register({ adapters, gateways, config })`.
+- **Local apps (Hyde AI, scripts)**: a typed HTTP API with its own narrower token
+  (`<dataDir>/clients/hyde-ai.token`); the running hub's address is in `~/.hyde/hub.json`.
+  See [docs/api.md](docs/api.md).
 
 ## Development
 

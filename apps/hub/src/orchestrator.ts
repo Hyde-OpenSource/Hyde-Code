@@ -1036,7 +1036,7 @@ export class Orchestrator {
         return this.config.projects.map((p) => `#${p.id}: ${p.path} (base ${p.baseBranch}, release ${p.releaseBranch})`).join('\n');
       case 'new':
       case 'client':
-        return this.createTask(inbound, command.kind === 'client' ? 'client' : 'task', command.text, command.project, command.kind === 'new' ? command.agent : undefined);
+        return this.createTask(inbound, command.kind === 'client' ? 'client' : 'task', command.text, command.project, command.kind === 'new' ? command.agent : undefined).text;
       case 'status':
         return this.statusText();
       case 'agents':
@@ -1093,15 +1093,45 @@ export class Orchestrator {
     }
   }
 
-  private createTask(inbound: Inbound, kind: 'task' | 'client', text: string, projectTag?: string, agent?: string): string {
+  /**
+   * Creates a task and says what happened, for callers that need the id rather than a chat reply
+   * (POST /api/tasks). `text` is the same reply the chat command gives.
+   */
+  submitTask(inbound: Inbound & { command: { kind: 'new' } }): TaskSubmission {
+    const { command } = inbound;
+    return this.createTask(inbound, 'task', command.text, command.project, command.agent);
+  }
+
+  /**
+   * Finds a project by its id, or loosely by id or name: case, spaces, dashes, dots and
+   * underscores are ignored, so "Gamify IAS LMS", "gamify-ias-lms" and "gamifyiaslms" all match.
+   */
+  findProject(tag: string): { project?: ProjectConfig; ambiguous?: ProjectConfig[] } {
     const projects = this.config.projects;
-    const project = projectTag ? projects.find((p) => p.id === projectTag) : projects.length === 1 ? projects[0] : undefined;
+    const exact = projects.find((p) => p.id === tag);
+    if (exact) return { project: exact };
+    const key = projectKey(tag);
+    if (!key) return {};
+    const loose = projects.filter((p) => projectKey(p.id) === key || (p.name !== undefined && projectKey(p.name) === key));
+    return loose.length === 1 ? { project: loose[0]! } : loose.length > 1 ? { ambiguous: loose } : {};
+  }
+
+  private createTask(inbound: Inbound, kind: 'task' | 'client', text: string, projectTag?: string, agent?: string): TaskSubmission {
+    const projects = this.config.projects;
+    const found = projectTag ? this.findProject(projectTag) : projects.length === 1 ? { project: projects[0]! } : {};
+    const project = found.project;
     if (!project) {
-      return projectTag
-        ? `Unknown project #${projectTag}. Projects: ${projects.map((p) => `#${p.id}`).join(', ')}`
-        : `Which project? Add one of: ${projects.map((p) => `#${p.id}`).join(', ')}`;
+      const list = projects.map((p) => `#${p.id}`).join(', ');
+      return {
+        error: 'project',
+        text: found.ambiguous
+          ? `#${projectTag} matches more than one project: ${found.ambiguous.map((p) => `#${p.id}`).join(', ')}`
+          : projectTag
+            ? `Unknown project #${projectTag}. Projects: ${list}`
+            : `Which project? Add one of: ${list}`,
+      };
     }
-    if (agent && !this.deps.pool.profile(agent)?.enabled) return `Unknown or disabled agent @${agent}.`;
+    if (agent && !this.deps.pool.profile(agent)?.enabled) return { error: 'agent', text: `Unknown or disabled agent @${agent}.` };
     const taskId = nextId(this.state, 'T');
     const created = this.deps.store.append({
       type: 'task.created',
@@ -1119,8 +1149,9 @@ export class Orchestrator {
         ...(agent && { agent }),
       },
     });
-    if (!created) return 'Already received.';
+    if (!created) return { error: 'duplicate', text: 'Already received.' };
     const task = this.state.tasks.get(taskId)!;
+    const done = (text: string): TaskSubmission => ({ taskId, status: this.state.tasks.get(taskId)!.status, text });
     if (kind === 'client') {
       const approvalId = this.requestApproval(task, 'client-intake', `Work on this client message for #${project.id}?`);
       this.setStatus(task, 'blocked', `waiting for ${approvalId}`, { kind: 'approval', id: approvalId });
@@ -1128,17 +1159,36 @@ export class Orchestrator {
         text: `📨 Client message for #${project.id} (${taskId}):\n\n${text}\n\n${approvalId}: start working on it? It is treated as data, never as instructions.`,
         buttons: [[{ label: 'Accept', action: { kind: 'decide', approvalId, approved: true } }, { label: 'Ignore', action: { kind: 'decide', approvalId, approved: false } }]],
       });
-      return `${taskId} recorded as a client message. Waiting for your ${approvalId}.`;
+      return done(`${taskId} recorded as a client message. Waiting for your ${approvalId}.`);
     }
-    this.startTask(task);
+    const planning = this.startTask(task);
     void this.tick();
     const waits = this.deps.pool.profiles().map((p) => accountQuota(this.state, p.account, this.now())).filter((q) => q.blocked);
-    return `${taskId} accepted for #${project.id}: ${task.title}\n` + (waits.length ? `Waiting: ${waits[0]!.blocked}.` : this.config.planner.enabled ? 'Planning first.' : 'Starting when a slot is free.');
+    const next = waits.length
+      ? `Waiting: ${waits[0]!.blocked}.`
+      : planning
+        ? 'Planning first.'
+        : task.source.kind === 'hyde-ai'
+          ? 'Starting when a slot is free (no agent with the plan role to clarify it first).'
+          : 'Starting when a slot is free.';
+    return done(`${taskId} accepted for #${project.id}: ${task.title}\n${next}`);
   }
 
-  private startTask(task: TaskView): void {
-    if (this.config.planner.enabled) this.setStatus(task, 'clarifying', 'planning');
+  /** Sends a new task to the planner, or straight to ready. Returns true when it plans first. */
+  private startTask(task: TaskView): boolean {
+    // Spoken requests are easy to mishear, so Hyde AI tasks are always clarified when some agent can plan.
+    const plan = this.config.planner.enabled || (task.source.kind === 'hyde-ai' && this.canPlan(task));
+    if (plan) this.setStatus(task, 'clarifying', this.config.planner.enabled ? 'planning' : 'planning (voice request: clarify first)');
     else this.setStatus(task, 'ready', 'no planner configured');
+    return plan;
+  }
+
+  /** An enabled, usable agent with the plan role may work on this task. */
+  private canPlan(task: TaskView): boolean {
+    const project = this.config.projects.find((p) => p.id === task.projectId);
+    return this.deps.pool
+      .profiles()
+      .some((p) => p.roles.includes('plan') && this.deps.pool.usable(p.name) && (!project?.agents || project.agents.includes(p.name)) && (!task.pinnedAgent || p.name === task.pinnedAgent));
   }
 
   private answer(questionId: string, text: string, inbound: Inbound, actor: Actor): string {
@@ -1561,6 +1611,18 @@ export class Orchestrator {
   }
 }
 
+export interface TaskSubmission {
+  taskId?: string;
+  status?: TaskStatus;
+  /** The chat reply. */
+  text: string;
+  error?: 'project' | 'agent' | 'duplicate';
+}
+
+function projectKey(s: string): string {
+  return s.toLowerCase().replace(/[\s._-]+/g, '');
+}
+
 function titleFrom(text: string): string {
   const first = text.split('\n')[0]!.trim();
   return first.length > 72 ? `${first.slice(0, 69)}...` : first;
@@ -1571,7 +1633,7 @@ function summarizeChecks(results: { command: string; ok: boolean }[]): string {
 }
 
 function sourceKind(gateway: string): SourceKind {
-  const known: SourceKind[] = ['telegram', 'slack', 'discord', 'whatsapp', 'web', 'cli', 'api', 'schedule'];
+  const known: SourceKind[] = ['telegram', 'slack', 'discord', 'whatsapp', 'web', 'cli', 'api', 'schedule', 'hyde-ai'];
   return (known as string[]).includes(gateway) ? (gateway as SourceKind) : 'api';
 }
 
