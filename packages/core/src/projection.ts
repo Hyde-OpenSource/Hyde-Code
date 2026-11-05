@@ -37,6 +37,10 @@ export interface TaskView {
   assumptions: string[];
   /** Agent profile that owns the worktree. */
   agent?: string;
+  /** Seq of the latest workspace assignment (runs after it belong to the current agent). */
+  agentSeq?: number;
+  /** Agents the task was taken away from; the router doesn't give it back to them. */
+  leftAgents: string[];
   node?: string;
   branch?: string;
   worktree?: string;
@@ -223,6 +227,7 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         attempts: 0,
         complexityHistory: [],
         assumptions: [],
+        leftAgents: [],
         reviews: [],
         artifactIds: [],
         statusHistory: [],
@@ -280,7 +285,15 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
       const task = state.tasks.get(record.payload.taskId);
       if (!task) break;
       const p = record.payload;
-      Object.assign(task, { agent: p.agent, branch: p.branch, worktree: p.worktree, baseBranch: p.baseBranch, node: p.node });
+      Object.assign(task, { agent: p.agent, branch: p.branch, worktree: p.worktree, baseBranch: p.baseBranch, node: p.node, agentSeq: record.seq });
+      break;
+    }
+    case 'task.reassigned': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (!task) break;
+      if (!task.leftAgents.includes(record.payload.from)) task.leftAgents.push(record.payload.from);
+      delete task.agent;
+      delete task.sessionRef;
       break;
     }
     case 'task.agent_completed': {

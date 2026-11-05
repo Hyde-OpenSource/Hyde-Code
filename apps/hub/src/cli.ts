@@ -67,6 +67,16 @@ async function hubUp(url: string): Promise<boolean> {
   }
 }
 
+/** Something answers HTTP on the hub's port (a hub that is still starting answers 503). */
+async function hubAnswers(url: string): Promise<boolean> {
+  try {
+    await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1500) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function startHub(url: string, quiet = false): Promise<void> {
   if (await hubUp(url)) return;
   if (!quiet) process.stdout.write(c.dim('Starting the Hyde hub in the background… '));
@@ -81,7 +91,8 @@ async function startHub(url: string, quiet = false): Promise<void> {
       if (!quiet) console.log(c.ok('ready'));
       return;
     }
-    if (child.exitCode !== null) break;
+    // Our hub exits at once when another one already holds the port; wait for that one instead.
+    if (child.exitCode !== null && !(await hubAnswers(url))) break;
     await new Promise((r) => setTimeout(r, 250));
   }
   console.log(c.bad('failed'));

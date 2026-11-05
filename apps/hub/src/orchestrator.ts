@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   ADAPTER_MAX_EFFORT,
   apply,
+  COMPLEXITY_LEVELS,
   canTransition,
   clampEffort,
   classifyByRules,
@@ -26,6 +27,7 @@ import {
   type Inbound,
   type OutboundMessage,
   type QuestionView,
+  type RunView,
   type RunHandle,
   type RunMode,
   type RunSpec,
@@ -250,7 +252,11 @@ export class Orchestrator {
 
   private recordQuota(account: string, q: { window: string; status: 'allowed' | 'warning' | 'rejected'; utilization?: number; resetsAt?: number }): void {
     const prev = this.state.quotas.get(`${account}:${q.window}`);
-    const same = prev && prev.status === q.status && prev.utilization === q.utilization && prev.resetsAt === q.resetsAt;
+    // Rolling windows move their reset time a little on every poll; that alone is not news
+    // (Codex logged 668 quota events in three days, mostly resetsAt drifting by seconds).
+    const pct = (u?: number) => (u === undefined ? undefined : Math.round(u * 100));
+    const resetMoved = Math.abs((prev?.resetsAt ?? 0) - (q.resetsAt ?? 0)) >= 15 * 60 && !(q.status === 'allowed' && (q.utilization ?? 0) === 0);
+    const same = prev && prev.status === q.status && pct(prev.utilization) === pct(q.utilization) && !resetMoved;
     if (same) return;
     this.append({
       type: 'quota.updated',
@@ -303,19 +309,18 @@ export class Orchestrator {
       agent = task.agent;
       const profile = this.deps.pool.profile(agent);
       const quota = profile ? accountQuota(this.state, profile.account, this.now()) : undefined;
-      if (!profile?.enabled || quota?.blocked) return false;
+      if (!profile?.enabled) return false;
+      if (quota?.blocked) {
+        await this.waitOrMove(task, mode, agent, quota.blocked, quota.blockedUntil);
+        return false;
+      }
       routedRun = this.sessionPlacement(task, mode, profile, quota?.max ?? 0);
     } else {
-      const routed = route({
-        task,
-        mode,
-        project,
-        state: this.state,
-        pool: this.deps.pool,
-        config: this.config,
-        now: this.now(),
-        ...(extra.author && { author: extra.author }),
-      });
+      const input = { task, mode, project, state: this.state, pool: this.deps.pool, config: this.config, now: this.now(), ...(extra.author && { author: extra.author }) };
+      // A planner that failed on this task is skipped for the retry, if another one can plan.
+      const failedPlanners = mode === 'plan' ? this.failedPlanRuns(task).map((r) => r.agent) : [];
+      let routed = route({ ...input, ...(failedPlanners.length && { exclude: failedPlanners }) });
+      if (failedPlanners.length && 'none' in routed) routed = route(input);
       if ('wait' in routed) {
         await this.noteWaiting(task, mode, routed.wait);
         return false;
@@ -345,6 +350,14 @@ export class Orchestrator {
     const host = this.deps.host(profile.node);
     const readOnly = READ_ONLY_MODES.includes(mode);
 
+    if (!readOnly && task.worktree && !task.agent) {
+      // Moved off another agent: the new one takes over the same worktree and branch.
+      this.append({
+        type: 'task.workspace_assigned',
+        taskId: task.id,
+        payload: { taskId: task.id, agent, branch: task.branch!, worktree: task.worktree, baseBranch: task.baseBranch ?? project.baseBranch, node: task.node ?? profile.node },
+      });
+    }
     if (!readOnly && !task.worktree) {
       const branch = branchName(agent, 'feature', task.id, task.title);
       // A task that depends on unmerged work starts from that work's branch (stacked PRs).
@@ -533,13 +546,21 @@ export class Orchestrator {
       return {
         mode: 'continue',
         prompt:
-          'Continue the task. When it is done and verified, commit and call complete_task. ' +
-          'If you are blocked on a decision, call ask_question.',
+          'Your last turn ended without calling the complete_task tool, so the harness does not know whether you are done. ' +
+          'If the task is done and verified, commit and call complete_task now (summary, how you verified it, files changed). ' +
+          'If it is not done, finish it, then call complete_task. If you are blocked on a decision, call ask_question. ' +
+          'Do not end this turn without calling one of those two tools.',
       };
     }
+    const before = task.leftAgents.at(-1);
     return {
       mode: 'start',
-      prompt: `Start task ${task.id}: ${task.title}\n\n${task.spec}\n\nFollow the task packet in your system prompt.`,
+      prompt:
+        `Start task ${task.id}: ${task.title}\n\n${task.spec}\n\n` +
+        (before
+          ? `${before} worked on this before you and stopped without finishing. Its changes are in this worktree: check \`git status\` and \`git log\`, keep what is right, and finish the task. `
+          : '') +
+        'Follow the task packet in your system prompt.',
     };
   }
 
@@ -608,7 +629,10 @@ export class Orchestrator {
       this.recordQuota(run.account, { window: 'five_hour', status: 'rejected', resetsAt: Math.floor(this.now() / 1000) + 3600 });
       return;
     }
-    if (failure && failure.reason !== 'cancelled') {
+    // A resumed session that prints nothing is the same as stopping without complete_task
+    // (OpenCode, T-4 runs 10-11): no backoff retries for it.
+    const silent = failure?.reason === 'crashed' && /no output/i.test(failure.detail ?? '') && run.mode !== 'start';
+    if (failure && failure.reason !== 'cancelled' && !silent) {
       const failures = task.runIds.filter((id) => {
         const r = this.state.runs.get(id);
         return r && r.mode !== 'plan' && r.mode !== 'review' && (r.failure || id === runId);
@@ -626,14 +650,63 @@ export class Orchestrator {
       return;
     }
 
-    // Clean exit without complete_task: nudge in the same session, up to the limit.
-    const continuations = task.runIds.filter((id) => this.state.runs.get(id)?.mode === 'continue').length;
-    if (continuations >= this.config.maxContinuations) {
-      await this.fail(task, `${task.id} stopped without reporting done`, `after ${continuations} continuation prompts. Last message: ${run.summary ?? ''}`);
+    // Ended without complete_task: nudge once in the same session, then move the task on.
+    const mine = task.runIds
+      .map((id) => this.state.runs.get(id))
+      .filter((r) => r && !READ_ONLY_MODES.includes(r.mode) && r.agent === run.agent && r.dispatchedSeq > (task.agentSeq ?? 0));
+    const nudges = mine.filter((r) => r!.mode === 'continue').length;
+    if (nudges < this.config.maxContinuations) {
+      this.retryAt.set(task.id, this.now()); // next tick (ticks are seconds apart)
+      this.setStatus(task, 'ready', `turn ended without complete_task; nudging ${run.agent}`);
       return;
     }
-    this.retryAt.set(task.id, this.now() + 1000);
-    this.setStatus(task, 'ready', 'turn ended without complete_task');
+    await this.escalate(task, run.agent, `${run.agent} ended ${nudges + 1} turns without calling complete_task${silent ? ' (the last one printed nothing)' : ''}`);
+  }
+
+  /**
+   * Takes a task away from an agent that keeps stopping without finishing: one tier up (free
+   * models can't take medium work, so this leaves them), on another agent. Pinned tasks, and
+   * tasks nobody else can take, go to the owner instead.
+   */
+  private async escalate(task: TaskView, from: string, reason: string): Promise<void> {
+    if (task.pinnedAgent) {
+      await this.fail(task, `${task.id} stopped without reporting done`, `${reason}. It is pinned to ${from}, so it was not moved. /retry ${task.id} or /stop ${task.id}.`);
+      return;
+    }
+    const level = task.complexity?.level ?? 'medium';
+    const next = COMPLEXITY_LEVELS[Math.min(COMPLEXITY_LEVELS.length - 1, COMPLEXITY_LEVELS.indexOf(level) + 1)]!;
+    const probe = { ...task, leftAgents: [...task.leftAgents, from], complexity: { ...(task.complexity ?? { by: 'harness' as const, reason: '', seq: 0 }), level: next, confident: true } };
+    const project = this.project(task.projectId);
+    const routed = route({ task: probe, mode: 'start', project, state: this.state, pool: this.deps.pool, config: this.config, now: this.now() });
+    if ('none' in routed) {
+      await this.fail(task, `${task.id} stopped without reporting done`, `${reason}. No other agent can take it at the ${next} tier (${routed.none}). /retry ${task.id} to try ${from} again, or /level ${task.id} <level>.`);
+      return;
+    }
+    if (next !== level && task.complexity?.by !== 'owner') this.classified(task, next, 'harness', `${reason}; moved up from ${level}`);
+    this.append({ type: 'task.reassigned', taskId: task.id, payload: { taskId: task.id, from, reason } });
+    this.setStatus(task, 'ready', `moved off ${from}: ${reason}`);
+    await this.notifyTask(task, { text: `↗️ ${task.id} moved off ${from} (${reason}). The next run is on the ${this.state.tasks.get(task.id)!.complexity?.level ?? next} tier${'agent' in routed ? ` (${routed.agent})` : ''}; the work so far stays in the worktree.`, priority: 'digest' });
+  }
+
+  /** The agent that owns a task's session is out of quota: wait for a reset that is close, else move the task. */
+  private async waitOrMove(task: TaskView, mode: RunMode, agent: string, blocked: string, until: number | undefined): Promise<void> {
+    const when = until ? resetText(Math.floor(until / 1000)) : 'later';
+    const soon = until !== undefined && until - this.now() < 30 * 60_000;
+    if (soon || task.pinnedAgent || mode === 'conflict') {
+      await this.noteWaiting(task, mode, `${agent}: ${blocked} until ${when}; ${task.id} continues in its session then`);
+      return;
+    }
+    const project = this.project(task.projectId);
+    const probe = { ...task, leftAgents: [...task.leftAgents, agent] };
+    const routed = route({ task: probe, mode: 'start', project, state: this.state, pool: this.deps.pool, config: this.config, now: this.now() });
+    if (!('agent' in routed)) {
+      await this.noteWaiting(task, mode, `${agent}: ${blocked} until ${when}, and no other agent can take its ${task.complexity?.level ?? 'medium'} work now`);
+      return;
+    }
+    const reason = `${agent}: ${blocked} until ${when}`;
+    this.append({ type: 'task.reassigned', taskId: task.id, payload: { taskId: task.id, from: agent, reason } });
+    if (task.status !== 'ready') this.setStatus(task, 'ready', `moved off ${agent}: ${reason}`);
+    await this.notifyTask(task, { text: `↗️ ${task.id} moved from ${agent} to ${routed.agent}: ${reason}. The work so far stays in the worktree.`, priority: 'digest' });
   }
 
   // ---------------------------------------------------------------- complexity
@@ -711,6 +784,29 @@ export class Orchestrator {
     });
   }
 
+  /** Plan runs of this task that gave no usable plan (failed, unparsed or rejected). */
+  private failedPlanRuns(task: TaskView, stalledRun?: string): RunView[] {
+    return task.runIds
+      .map((id) => this.state.runs.get(id)!)
+      .filter((r) => r && r.mode === 'plan' && r.state === 'exited')
+      .filter((r) => r.id === stalledRun || r.failure !== undefined || r.structured === undefined || checkPlan(r.structured).errors.length > 0)
+      .filter((r) => !this.openBlockingFor(r.id) && ![...this.state.questions.values()].some((q) => q.runId === r.id));
+  }
+
+  /** Keeps a planner's raw output as an artifact so a failed plan can be read later. */
+  private savePlannerOutput(task: TaskView, run: RunView, why: string): void {
+    try {
+      const dir = join(this.config.dataDir, 'artifacts', task.id);
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, `${run.id}-planner-output.txt`);
+      writeFileSync(path, [`${run.id} on ${run.agent} (${run.model ?? 'unknown model'}): ${why}`, '', '--- final message ---', run.summary ?? '(none)', '', '--- last text ---', run.lastText ?? '(none)', '', '--- failure ---', run.failure ? `${run.failure.reason}: ${run.failure.detail ?? ''}` : '(none)', ''].join('\n'));
+      const artifactId = nextId(this.state, 'art');
+      this.append({ type: 'artifact.saved', taskId: task.id, runId: run.id, payload: { artifactId, taskId: task.id, runId: run.id, kind: 'log', path, label: `planner output of ${run.id} (${why.slice(0, 60)})` } });
+    } catch (err) {
+      this.log(`${task.id}: could not save planner output: ${(err as Error).message}`);
+    }
+  }
+
   /** An open question the run is waiting for: one it asked as blocking, or an earlier one it was linked to. */
   private openBlockingFor(runId: string): QuestionView | undefined {
     return [...this.state.questions.values()].find(
@@ -740,18 +836,20 @@ export class Orchestrator {
       this.setStatus(task, 'blocked', `planner waiting for ${asked.id}`, { kind: 'question', id: asked.id });
       return;
     }
-    const planRuns = task.runIds.filter((id) => this.state.runs.get(id)?.mode === 'plan').length;
+    const failed = this.failedPlanRuns(task, live?.stalled ? runId : undefined).length;
     if (run.failure || live?.stalled || run.structured === undefined) {
-      if (planRuns >= 2) {
+      this.savePlannerOutput(task, run, live?.stalled ? 'stalled' : run.failure ? `${run.failure.reason}: ${run.failure.detail ?? ''}` : 'no JSON plan in the output');
+      if (failed >= 2) {
         this.setStatus(task, 'ready', 'planner failed twice; running the task as one unit');
         return;
       }
-      this.retryAt.set(task.id, this.now() + retryDelayMs(planRuns));
+      this.retryAt.set(task.id, this.now() + retryDelayMs(failed));
       return;
     }
     const check = checkPlan(run.structured);
     if (check.errors.length) {
-      if (planRuns >= 2) {
+      this.savePlannerOutput(task, run, `plan rejected: ${check.errors.join('; ')}`);
+      if (failed >= 2) {
         this.setStatus(task, 'ready', `plan rejected (${check.errors[0]}); running the task as one unit`);
         return;
       }

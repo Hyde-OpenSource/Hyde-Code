@@ -63,11 +63,12 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO
+- **Status:** DONE
 - **Priority:** high
 - **Files / area:** apps/hub/**, packages/adapters/**
 - **Done when:** Each item has a regression test or a real-run check: (1) OpenCode turns that end without `complete_task` are retried 3-4 times today (T-4 runs 9-12). Limit this, nudge the agent once with a clear "call complete_task or ask_question" message, then move the task to a stronger tier or ask the owner. (2) When Codex is quota-blocked (it hit its 5-hour and 7-day limits almost daily), its tasks go to another agent that can do that tier, or wait with a clear notice. (3) The planner failed twice on Codex with unparsed output (T-2). Retry once on a different agent, and keep the raw output as an artifact. (4) `hyde`/`pnpm start` crashed with EADDRINUSE when a hub was already running on 7420. Detect the running hub and say so instead of a stack trace. (5) Go through ~/.hyde/hub.log and the event log (read-only) for any other repeating failure and list what you found in progress.md.
 - **Notes:**
+  - 2026-11-05: All five items done with regression tests; port claim checked live with two scratch hubs. Findings list in progress.md.
 
 ## T-005: Hyde AI assistant as the front desk
 - **Assigned to:** agent-hyde-autonomy

@@ -98,6 +98,11 @@ export const eventPayloads = {
     /** False when the rules only guessed and a model should confirm. */
     confident: z.boolean().default(true),
   }),
+  /**
+   * The task leaves its agent (it stopped twice without finishing, or its quota is out for long):
+   * the worktree and branch stay, the session is dropped, and the router picks a new agent.
+   */
+  'task.reassigned': z.object({ taskId: z.string(), from: z.string(), reason: z.string() }),
   /** The router could not place a task's next run without a weaker model, so the task waits. */
   'task.waiting': z.object({ taskId: z.string(), reason: z.string() }),
   'task.status_changed': z.object({

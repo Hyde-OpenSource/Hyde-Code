@@ -140,6 +140,8 @@ export interface RouteInput {
   now: number;
   /** For review runs: the author's agent, whose vendor the reviewer must differ from. */
   author?: string;
+  /** Agents to skip (e.g. the planner that just failed). */
+  exclude?: string[];
 }
 
 export interface RoutedRun {
@@ -172,17 +174,22 @@ export function load(state: HarnessState): { byAgent: Map<string, number>; byAcc
 }
 
 /** Highest utilization across an account's windows, and whether a window is exhausted. */
-export function accountQuota(state: HarnessState, account: string, now: number): { max: number; blocked?: string } {
+export function accountQuota(state: HarnessState, account: string, now: number): { max: number; blocked?: string; blockedUntil?: number } {
   let max = 0;
   let blocked: string | undefined;
+  let blockedUntil: number | undefined;
   for (const q of state.quotas.values()) {
     if (q.account !== account) continue;
     if (q.resetsAt && q.resetsAt * 1000 < now) continue; // window already reset
     const u = q.utilization ?? 0;
-    if (q.status === 'rejected') blocked = `${q.window} limit reached`;
+    if (q.status === 'rejected') {
+      blocked = `${q.window} limit reached`;
+      // The account is free again when its last exhausted window resets.
+      if (q.resetsAt) blockedUntil = Math.max(blockedUntil ?? 0, q.resetsAt * 1000);
+    }
     max = Math.max(max, u);
   }
-  return { max, ...(blocked && { blocked }) };
+  return { max, ...(blocked && { blocked }), ...(blockedUntil && { blockedUntil }) };
 }
 
 function recentFailureRate(state: HarnessState, agent: string): number {
@@ -248,6 +255,9 @@ export function route(input: RouteInput): RouteResult {
   let candidates = pool.profiles().filter((p) => pool.usable(p.name));
   if (project.agents) candidates = candidates.filter((p) => project.agents!.includes(p.name));
   if (task.pinnedAgent && mode !== 'review' && mode !== 'classify') candidates = candidates.filter((p) => p.name === task.pinnedAgent);
+  // A task taken away from an agent (stopped without finishing, out of quota) doesn't go back to it.
+  if (job === 'code' && !task.pinnedAgent && task.leftAgents?.length) candidates = candidates.filter((p) => !task.leftAgents.includes(p.name));
+  if (input.exclude?.length) candidates = candidates.filter((p) => !input.exclude!.includes(p.name));
   if (mode === 'review') {
     const sameVendorOk = routing.mode === 'claude-only';
     if (!sameVendorOk) candidates = candidates.filter((p) => p.name !== input.author);

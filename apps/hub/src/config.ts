@@ -96,7 +96,8 @@ const configSchema = z.object({
   quotaSoftCeiling: z.number().min(0).max(1).default(0.8),
   stallTimeoutMinutes: z.number().positive().default(15),
   maxAttempts: z.number().int().min(1).default(3),
-  maxContinuations: z.number().int().min(0).default(2),
+  /** Nudges after a turn that ended without complete_task, before the task moves to another agent or tier. */
+  maxContinuations: z.number().int().min(0).default(1),
   maxFixRounds: z.number().int().min(0).default(3),
   checkTimeoutMinutes: z.number().positive().default(10),
   planner: z

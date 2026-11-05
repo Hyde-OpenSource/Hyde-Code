@@ -1,7 +1,7 @@
 import { rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { serve } from '@hono/node-server';
+import { createAdaptorServer } from '@hono/node-server';
 import { EventStore, Registry, type ChatGateway } from '@hyde/core';
 import { DiscordGateway } from '@hyde/gateway-discord';
 import { SlackGateway } from '@hyde/gateway-slack';
@@ -14,6 +14,7 @@ import { loadConfig, persistedSecret, type HubConfig } from './config.ts';
 import { detectAll } from './detect.ts';
 import { loadClientTokens } from './clients.ts';
 import { homePaths, loadHomeEnv, writeHubInfo } from './home.ts';
+import { claimPort } from './listen.ts';
 import { createApi } from './http.ts';
 import { NodeHub } from './nodes.ts';
 import { Notifier } from './notifier.ts';
@@ -27,6 +28,17 @@ const hydeRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 process.title = 'hyde-hub';
 loadHomeEnv();
 const config = loadConfig();
+
+// Claim the port first: a second hub must stop here, before it opens the event store (one
+// writer only), installs hooks or starts polling chat apps. Requests get 503 until the API is ready.
+let handler: ((req: Request) => Response | Promise<Response>) | undefined;
+const server = createAdaptorServer({ fetch: (req: Request) => (handler ? handler(req) : new Response('Hyde Code hub is starting', { status: 503 })) });
+const claim = await claimPort(server as never, config.port);
+if (!claim.ok) {
+  console.error(claim.message);
+  process.exit(claim.running ? 0 : 1);
+}
+
 const store = new EventStore(join(config.dataDir, 'events.db'));
 
 // ------------------------------------------------------------ registries and plugins
@@ -148,7 +160,7 @@ const app = createApi({
     log(`config reloaded (${config.projects.length} projects)`);
   },
 });
-const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: config.port });
+handler = app.fetch;
 nodeHub?.attach(server as never);
 log(`hub API and dashboard on ${hubUrl} (run \`hyde web\` to open it)`);
 const pidFile = homePaths().pid;
