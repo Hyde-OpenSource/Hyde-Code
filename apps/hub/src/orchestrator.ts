@@ -713,7 +713,11 @@ export class Orchestrator {
 
   /** A task goes through the planner when one is configured (trivial tasks skip it) or it came by voice. */
   private wantsPlan(task: TaskView): boolean {
-    if (task.source.kind === 'hyde-ai' && this.canPlan(task)) return true;
+    if (task.source.kind === 'hyde-ai') {
+      // assistant-plans: Hyde AI already turned the request into a task; the hub does not plan it again.
+      if (this.config.routing.mode === 'assistant-plans') return false;
+      if (this.canPlan(task)) return true;
+    }
     if (!this.config.planner.enabled) return false;
     return !(task.complexity?.level === 'trivial' && task.complexity.confident);
   }

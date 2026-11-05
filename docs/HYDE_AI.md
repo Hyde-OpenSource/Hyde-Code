@@ -78,18 +78,19 @@ waits for your approval when a plan has more than `planner.approvalOver` subtask
 
 ## 3. Contract between the two (keep it stable)
 
-The hub's client API is specified in `docs/api.md` (from the `feature/hyde-ai-api` branch,
-**apiVersion 1**). The desktop app (`apps/desktop/crates/hyde-ai/src/hydecode.rs`) uses it like this:
+The hub's client API is specified in `docs/api.md` (**apiVersion 2** since 2026-11-05: v1 plus
+complexity tiers). The desktop app (`apps/desktop/crates/hyde-ai/src/hydecode.rs`) uses it like this:
 
 | Step | API v1 hub | Older hub (fallback) |
 |---|---|---|
 | Find the hub | `$HYDE_HOME/hub.json` (`url`, `dataDir`, `apiVersion`), trusted only while `pid` is alive | `$HYDE_HOME/config.json` (`port`, `dataDir`) |
 | Token | `<dataDir>/clients/hyde-ai.token` (narrow: tasks, answers, decisions, read) | `<dataDir>/owner-token` |
 | Is it up | `GET /api/health` → `apiVersion` | same (no `apiVersion` = 0) |
-| New task | `POST /api/tasks {text, project, agent?, requestId}` → `{id, status, projectId}`; errors `{error, code}` | `/new … #project @agent` via `POST /api/commands` |
+| New task | `POST /api/tasks {text, project, agent?, requestId, complexity?}` → `{id, status, projectId, complexity}`; errors `{error, code}`. `complexity` (v2) is the assistant AI's guess, sent only to v2 hubs; the hub's rules decide | `/new … #project @agent` via `POST /api/commands` |
 | Answer / decide | `POST /api/questions/:id/answer {text}`, `POST /api/approvals/:id {decision}` | `/answer`, `/approve`, `/deny` commands |
 | Merge / stop / retry | `/merge`, `/stop`, `/retry` via `POST /api/commands` | same |
-| What needs me | `GET /api/summary` (`needsYou` questions, approvals, merges; agent quota) + `GET /api/state` for the task list | `GET /api/state` only |
+| What needs me | `GET /api/summary` (`needsYou` questions, approvals, merges; agent quota; v2: `routing`, `alsoAskedBy` so a repeated question shows once) + `GET /api/state` for the task list with each task's `complexity` and latest run (agent, tier, model, effort) | `GET /api/state` only |
+| Who writes coding instructions | v2 `routing.mode`: in `assistant-plans` the assistant's AI writes a precise task and the hub skips its planner; in every other mode the AI passes the owner's words through (plus a level guess) and Hyde Code's strong planner writes the instructions | the AI writes the task |
 | Live updates | SSE `GET /api/events` → desktop notifications (`notify-send`) for `question.asked`, `approval.requested`, `task.pr_opened`, `incident.raised`, task done; resumes with `?after=<seq>` | none |
 | Open the office | `GET /login?token=<owner token>` (owner token only) | same |
 | Start the hub | `hyde hub start` | same |
@@ -99,7 +100,10 @@ The desktop app's own API lets its UI send only `/approve /deny /merge /stop /re
 the client token can't do them either (the hub answers 401/403).
 
 Tasks the desktop app creates are recorded with actor `client:hyde-ai` and source `hyde-ai`, and
-always go through the planner's clarify step when an agent has the `plan` role.
+go through the planner's clarify step when an agent has the `plan` role (except in the
+`assistant-plans` mode, where the assistant has already done it). The Hyde Code tab shows each
+task's complexity, agent and model, and why a task waits; a question several agents asked is
+one card ("Also asked by … on T-n").
 
 Verified on 2026-10-30 against the real v1 hub in a scratch `HYDE_HOME`, with a `command` agent
 that runs `true` (no AI CLI, no quota). Covered: task creation by voice with a project name and

@@ -454,3 +454,10 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
+
+/* Complexity tiers from Hyde Code (API v2) */
+.pill.level { font-size: 11px; padding: 0 6px; vertical-align: 1px; }
+.pill.level.trivial, .pill.level.low { background: var(--ok-soft); color: var(--ok); }
+.pill.level.medium { background: var(--info-soft); color: var(--info); }
+.pill.level.high { background: var(--warn-soft); color: var(--warn); }
+.task-wait, .need-also { display: block; opacity: .8; overflow-wrap: anywhere; }

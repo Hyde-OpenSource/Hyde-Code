@@ -245,11 +245,37 @@ pub enum Route {
     Answer(String),
 }
 
+/// What the assistant's own (free or cheap) model may do with a coding request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Coding {
+    /// Route it only: pass the owner's words on; Hyde Code's planner writes the instructions
+    /// (every mode except `assistant-plans`).
+    Route,
+    /// `assistant-plans` mode: write the task as a precise instruction; Hyde Code won't plan it again.
+    Plan,
+}
+
+/// Complexity levels Hyde Code understands; the assistant may suggest one, the hub decides.
+pub const LEVELS: [&str; 4] = ["trivial", "low", "medium", "high"];
+
+fn coding_rule(coding: Coding) -> &'static str {
+    match coding {
+        Coding::Route => "Coding work (build, fix, refactor, write tests, add a feature to a software project) goes to \
+Hyde Code with \"hyde code <the user's request in their own words> [in <project>] [using <agent>]\". Keep their words: \
+do not add requirements, files, steps or details; Hyde Code's planner writes the instructions for the coding agent.",
+        Coding::Plan => "Coding work (build, fix, refactor, write tests, add a feature to a software project) goes to \
+Hyde Code with \"hyde code <clear task description> [in <project>] [using <agent>]\"; write the task \
+as a precise instruction a developer could act on: what to change, the files if you know them, and how to tell it is done. \
+Hyde Code will not plan it again.",
+    }
+}
+
 pub fn route(
     config: &AiConfig,
     catalogue: &str,
     history: &[Message],
     input: &str,
+    coding: Coding,
 ) -> Result<Route, String> {
     let system = format!(
         "You are Hyde, a concise desktop assistant on Linux. You control the computer ONLY through \
@@ -260,10 +286,12 @@ Respond with ONE JSON object and nothing else:\n\
 {{\"command\": \"<plain command phrase(s)>\"}}. Join several steps with \" then \" and \
 parallel steps with \" and \". Use the exact words from the list.\n\
 - Otherwise answer the user yourself: {{\"answer\": \"<helpful reply in markdown, short>\"}}.\n\
-Coding work (build, fix, refactor, write tests, add a feature to a software project) goes to \
-Hyde Code with \"hyde code <clear task description> [in <project>] [using <agent>]\"; write the task \
-as a precise instruction a developer could act on.\n\
-Never invent commands that are not listed."
+{coding}\n\
+For a Hyde Code command you may add \"level\": your guess at how hard it is, one of trivial (a rename, typo or \
+one-line change), low (one small file, docs or config), medium (a feature or fix in a few files) or high (design work, \
+many files, security or data). Hyde Code makes the final call.\n\
+Never invent commands that are not listed.",
+        coding = coding_rule(coding)
     );
     let mut messages = vec![Message::system(system)];
     messages.extend(history.iter().cloned());
@@ -290,7 +318,20 @@ pub fn parse_route(text: &str) -> Route {
                 .and_then(Value::as_str)
                 .filter(|c| !c.trim().is_empty())
             {
-                Route::Command(command.trim().to_owned())
+                let mut command = command.trim().to_owned();
+                // A level guess rides along on Hyde Code commands as a trailing marker that
+                // `agent::code_task` strips and sends as the hub's `complexity` hint.
+                let level = value
+                    .get("level")
+                    .and_then(Value::as_str)
+                    .map(str::to_lowercase)
+                    .filter(|l| LEVELS.contains(&l.as_str()));
+                if let Some(level) = level {
+                    if command.to_lowercase().starts_with("hyde code ") {
+                        command.push_str(&format!(" [level:{level}]"));
+                    }
+                }
+                Route::Command(command)
             } else if let Some(answer) = value.get("answer").and_then(Value::as_str) {
                 Route::Answer(answer.trim().to_owned())
             } else {
@@ -332,6 +373,29 @@ mod tests {
             parse_route("{\"command\": \"\"}"),
             Route::Answer("{\"command\": \"\"}".into())
         );
+    }
+
+    #[test]
+    fn carries_a_level_guess_on_hyde_code_commands_only() {
+        assert_eq!(
+            parse_route("{\"command\": \"hyde code rename foo to bar\", \"level\": \"Trivial\"}"),
+            Route::Command("hyde code rename foo to bar [level:trivial]".into())
+        );
+        assert_eq!(
+            parse_route("{\"command\": \"open chrome\", \"level\": \"low\"}"),
+            Route::Command("open chrome".into())
+        );
+        assert_eq!(
+            parse_route("{\"command\": \"hyde code fix it\", \"level\": \"huge\"}"),
+            Route::Command("hyde code fix it".into())
+        );
+    }
+
+    #[test]
+    fn only_assistant_plans_mode_lets_the_free_model_write_instructions() {
+        assert!(coding_rule(Coding::Route).contains("in their own words"));
+        assert!(coding_rule(Coding::Route).contains("do not add requirements"));
+        assert!(coding_rule(Coding::Plan).contains("precise instruction"));
     }
 
     #[test]

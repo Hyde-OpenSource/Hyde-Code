@@ -69,6 +69,7 @@ fn main() {
         config: Mutex::new(config.clone()),
         jobs: tools::Jobs::default(),
         data_dir: cli.data.clone(),
+        code_level: Mutex::new(None),
     });
 
     let code = match cli.command.unwrap_or(Cmd::Ui {

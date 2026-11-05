@@ -156,6 +156,53 @@ describe('client API', () => {
   });
 });
 
+describe('client API v2: complexity tiers', () => {
+  it('takes a complexity hint, lets the client change the level, and reports tiers in the summary', async () => {
+    const req = await api({ turns: [doWork()] });
+    // The rules decide when they can ("rename" is trivial); the hint only settles unsure requests.
+    const sure = (await (await req('/api/tasks', { token: CLIENT, json: { text: 'Rename hello to hi in hello.txt', complexity: 'high', requestId: 'a' } })).json()) as Record<string, any>;
+    expect(sure.complexity).toMatchObject({ level: 'trivial', by: 'rules' });
+    const unsure = (await (await req('/api/tasks', { token: CLIENT, json: { text: 'hmm the thing', complexity: 'low', requestId: 'b' } })).json()) as Record<string, any>;
+    expect(unsure.complexity).toMatchObject({ level: 'low', by: 'client' });
+    expect((await req('/api/tasks', { token: CLIENT, json: { text: 'x', complexity: 'huge' } })).status).toBe(400);
+
+    const set = await req('/api/tasks/T-2/level', { token: CLIENT, json: { level: 'medium' } });
+    expect(await set.json()).toMatchObject({ id: 'T-2', complexity: { level: 'medium', by: 'owner' } });
+    expect((await req('/api/tasks/T-9/level', { token: CLIENT, json: { level: 'low' } })).status).toBe(404);
+    expect((await req('/api/tasks/T-2/level', { token: CLIENT, json: { level: 'big' } })).status).toBe(400);
+
+    await h.until(() => h.o.state.runs.size >= 1, 'a run');
+    const summary = (await (await req('/api/summary', { token: CLIENT })).json()) as Record<string, any>;
+    expect(summary.routing).toEqual({ mode: 'balanced', effort: 'balanced' });
+    const t1 = summary.tasks.find((t: { id: string }) => t.id === 'T-1');
+    // Voice requests are clarified first: the planner runs one tier up (medium for trivial work).
+    expect(t1).toMatchObject({ complexity: { level: 'trivial' }, run: { agent: 'claude-1', mode: 'plan', tier: 'medium', requestedModel: 'sonnet', effort: 'medium' } });
+  });
+
+  it('lists a question once, with who else asked it', async () => {
+    const ask = (question: string): Turn => async ({ runId, o }) => {
+      await o.agentCall(runId, 'ask_question', { question, blocking: true });
+      return [{ type: 'run.completed', summary: 'waiting' }];
+    };
+    const req = await api({ turns: [ask('Which database should I use for the cache?'), ask('Which database should we use for the cache?')] });
+    h.config.maxConcurrentRuns = 1;
+    await req('/api/tasks', { token: CLIENT, json: { text: 'Add a cache layer' } });
+    await h.until(() => h.o.state.tasks.get('T-1')!.status === 'blocked', 'T-1 asks');
+    await req('/api/tasks', { token: CLIENT, json: { text: 'Add cache metrics' } });
+    await h.until(() => h.o.state.tasks.get('T-2')!.status === 'blocked', 'T-2 asks');
+    const summary = (await (await req('/api/summary', { token: CLIENT })).json()) as Record<string, any>;
+    expect(summary.needsYou).toEqual([expect.objectContaining({ kind: 'question', id: 'Q-1', alsoAskedBy: [{ by: 'claude-1', taskId: 'T-2' }] })]);
+  });
+
+  it('assistant-plans: Hyde AI requests skip the hub planner', async () => {
+    const req = await api({ planner: true, turns: [doWork()] });
+    h.config.routing.mode = 'assistant-plans';
+    await req('/api/tasks', { token: CLIENT, json: { text: 'Add a hello file' } });
+    await h.until(() => h.o.state.approvals.has('A-1'), 'done without planning');
+    expect([...h.o.state.runs.values()].map((r) => r.mode)).toEqual(['start']);
+  });
+});
+
 describe('client token', () => {
   it('reads state and events but never config, projects, metrics or the dashboard login', async () => {
     const req = await api();

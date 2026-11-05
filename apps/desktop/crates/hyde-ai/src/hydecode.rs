@@ -276,14 +276,21 @@ pub struct CreatedTask {
 }
 
 /// API v1: `POST /api/tasks`. `request_id` makes retries safe (a repeat returns `duplicate`).
+/// API v2: `complexity` is a suggestion; the hub's rules have the final say.
 pub fn create_task(
     hub: &Hub,
     text: &str,
     project: Option<&str>,
     agent: Option<&str>,
+    complexity: Option<&str>,
     request_id: &str,
 ) -> Result<CreatedTask, HubError> {
     let mut body = json!({ "text": text, "requestId": request_id });
+    if let Some(level) =
+        complexity.filter(|_| hub.api_version.or_else(|| health(hub)).unwrap_or(0) >= 2)
+    {
+        body["complexity"] = json!(level);
+    }
     if let Some(project) = project.filter(|p| !p.is_empty()) {
         body["project"] = json!(project);
     }
@@ -304,6 +311,54 @@ pub fn create_task(
         project_id: field("projectId"),
         text: reply_text(&value),
     })
+}
+
+/// The hub's routing mode (API v2 `/api/summary`), e.g. `balanced` or `assistant-plans`.
+pub fn routing_mode(hub: &Hub) -> Option<String> {
+    if !typed(hub) {
+        return None;
+    }
+    summary_v1(hub)
+        .ok()?
+        .pointer("/routing/mode")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Splits a trailing `[level:<level>]` marker (from the assistant's AI) off a task text.
+pub fn split_level(text: &str) -> (String, Option<String>) {
+    let trimmed = text.trim_end();
+    if let (Some(start), true) = (trimmed.rfind("[level:"), trimmed.ends_with(']')) {
+        let level = trimmed[start + 7..trimmed.len() - 1].trim().to_lowercase();
+        if crate::llm::LEVELS.contains(&level.as_str()) {
+            return (trimmed[..start].trim_end().to_owned(), Some(level));
+        }
+    }
+    (text.to_owned(), None)
+}
+
+/// "low · claude-1 · sonnet": a task's complexity and where its latest run went.
+pub fn route_label(task: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(level) = task.pointer("/complexity/level").and_then(Value::as_str) {
+        parts.push(level.to_owned());
+    }
+    if let Some(run) = task.get("run") {
+        if let Some(agent) = run.get("agent").and_then(Value::as_str) {
+            parts.push(agent.to_owned());
+        }
+        if let Some(model) = run
+            .get("requestedModel")
+            .or_else(|| run.get("model"))
+            .and_then(Value::as_str)
+        {
+            parts.push(match run.get("effort").and_then(Value::as_str) {
+                Some(effort) => format!("{model} ({effort})"),
+                None => model.to_owned(),
+            });
+        }
+    }
+    parts.join(" · ")
 }
 
 /// API v1: `POST /api/questions/:id/answer`.
@@ -739,10 +794,39 @@ pub fn summary(hub: &Hub, default_project: &str) -> Value {
                     "createdTs",
                     "parentId",
                     "attempts",
+                    "complexity",
+                    "waiting",
                 ],
             )
         })
         .collect();
+    // Where each task's latest run went (agent, tier, model, effort).
+    let runs = state
+        .get("runs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for task in tasks.iter_mut() {
+        let id = task.get("id").cloned();
+        let last = runs
+            .iter()
+            .filter(|r| r.get("taskId") == id.as_ref())
+            .max_by_key(|r| r.get("dispatchedSeq").and_then(Value::as_u64).unwrap_or(0));
+        if let Some(run) = last {
+            task["run"] = pick(
+                run,
+                &[
+                    "agent",
+                    "mode",
+                    "tier",
+                    "model",
+                    "requestedModel",
+                    "effort",
+                    "state",
+                ],
+            );
+        }
+    }
     let rank = |t: &Value| {
         let status = t.get("status").and_then(Value::as_str).unwrap_or("");
         ACTIVE_ORDER
@@ -810,7 +894,13 @@ pub fn summary(hub: &Hub, default_project: &str) -> Value {
                     .cloned()
                     .collect::<Vec<_>>()
             };
-            out["questions"] = json!(of("question"));
+            // The hub links repeated questions to one Q-n; keep one card per id regardless.
+            let mut seen = std::collections::HashSet::new();
+            out["questions"] = json!(of("question")
+                .into_iter()
+                .filter(|q| seen.insert(q.get("id").cloned().unwrap_or(Value::Null).to_string()))
+                .collect::<Vec<_>>());
+            out["routing"] = v1.get("routing").cloned().unwrap_or(Value::Null);
             out["approvals"] = json!(of("approval")
                 .into_iter()
                 .map(|mut a| {
@@ -868,11 +958,22 @@ pub fn status_text(summary: &Value) -> String {
         .flatten()
         .take(5)
     {
+        let also: Vec<String> = q["alsoAskedBy"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m["taskId"].as_str().map(str::to_owned))
+            .collect();
         lines.push(format!(
-            "- **{}** ({}) asks: {}",
+            "- **{}** ({}) asks: {}{}",
             q["id"].as_str().unwrap_or("?"),
             q["taskId"].as_str().unwrap_or("?"),
-            q["text"].as_str().unwrap_or("")
+            q["text"].as_str().unwrap_or(""),
+            if also.is_empty() {
+                String::new()
+            } else {
+                format!(" (also asked on {})", also.join(", "))
+            }
         ));
     }
     for a in summary["approvals"]
@@ -916,11 +1017,17 @@ pub fn status_text(summary: &Value) -> String {
         .filter(|t| t["status"] == "running")
         .take(5)
     {
+        let route = route_label(t);
         lines.push(format!(
-            "- {} is working on **{}**: {}",
+            "- {} is working on **{}**: {}{}",
             t["agent"].as_str().unwrap_or("an agent"),
             t["id"].as_str().unwrap_or("?"),
-            t["title"].as_str().unwrap_or("")
+            t["title"].as_str().unwrap_or(""),
+            if route.is_empty() {
+                String::new()
+            } else {
+                format!(" ({route})")
+            }
         ));
     }
     if lines.len() == 1 {
@@ -1010,6 +1117,52 @@ mod tests {
         assert_eq!(port_of("http://127.0.0.1:7420"), Some(7420));
         assert_eq!(port_of("http://127.0.0.1:17421/"), Some(17421));
         assert_eq!(port_of("nope"), None);
+    }
+
+    #[test]
+    fn splits_the_level_marker_from_the_task() {
+        assert_eq!(
+            split_level("rename foo to bar in my site [level:trivial]"),
+            (
+                "rename foo to bar in my site".into(),
+                Some("trivial".into())
+            )
+        );
+        assert_eq!(
+            split_level("fix it [level:huge]"),
+            ("fix it [level:huge]".into(), None)
+        );
+        assert_eq!(
+            split_level("add [x] support"),
+            ("add [x] support".into(), None)
+        );
+    }
+
+    #[test]
+    fn labels_tier_agent_and_model() {
+        let task = json!({
+            "complexity": { "level": "high" },
+            "run": { "agent": "claude-1", "requestedModel": "opus", "model": "claude-opus-5-5", "effort": "high" }
+        });
+        assert_eq!(route_label(&task), "high · claude-1 · opus (high)");
+        assert_eq!(
+            route_label(&json!({ "complexity": { "level": "low" } })),
+            "low"
+        );
+    }
+
+    #[test]
+    fn status_shows_tiers_and_who_else_asked() {
+        let summary = json!({
+            "running": true,
+            "questions": [{ "id": "Q-1", "taskId": "T-1", "text": "Which database?", "alsoAskedBy": [{ "by": "codex-1", "taskId": "T-2" }] }],
+            "tasks": [{ "id": "T-3", "title": "Add auth", "status": "running", "agent": "claude-1",
+                        "complexity": { "level": "high" }, "run": { "agent": "claude-1", "requestedModel": "opus", "effort": "high" } }]
+        });
+        let text = status_text(&summary);
+        assert!(text.contains("**Q-1** (T-1) asks: Which database? (also asked on T-2)"));
+        assert!(text
+            .contains("claude-1 is working on **T-3**: Add auth (high · claude-1 · opus (high))"));
     }
 
     #[test]

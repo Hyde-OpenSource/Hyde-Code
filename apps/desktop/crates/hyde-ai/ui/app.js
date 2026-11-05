@@ -710,6 +710,7 @@ function renderNeeds(data) {
     items.push(el('div', { class: 'card need' },
       el('div', { class: 'need-top' }, el('span', { class: 'id' }, q.id), 'question on', el('span', { class: 'id' }, q.taskId), q.taskTitle ? `· ${q.taskTitle}` : null, q.blocking ? el('span', { class: 'pill blocked' }, 'blocking') : null),
       el('div', { class: 'need-text', html: markdown(q.text) }),
+      q.alsoAskedBy?.length ? el('small', { class: 'need-also' }, `Also asked by ${q.alsoAskedBy.map((m) => `${m.by} on ${m.taskId}`).join(', ')}. One answer goes to all of them.`) : null,
       quick.length ? el('div', { class: 'need-actions' }, ...quick) : null,
       el('div', { class: 'need-actions' }, input, send)));
   }
@@ -759,10 +760,15 @@ function renderTasks(tasks) {
       retry.addEventListener('click', () => codeCommand(`/retry ${t.id}`, retry));
       end.append(retry);
     }
-    const meta = [`#${t.projectId}`, t.agent || t.pinnedAgent, t.parentId ? `part of ${t.parentId}` : null].filter(Boolean).join(' · ');
+    const model = t.run ? (t.run.requestedModel || t.run.model) : null;
+    const meta = [`#${t.projectId}`, t.agent || t.pinnedAgent || t.run?.agent, model ? `${model}${t.run.effort ? ` (${t.run.effort})` : ''}` : null, t.parentId ? `part of ${t.parentId}` : null].filter(Boolean).join(' · ');
+    const level = t.complexity?.level;
     return el('div', { class: 'task-row' },
       el('span', { class: 'id' }, t.id),
-      el('div', { class: 'task-title' }, el('div', { title: t.title }, t.title), el('small', {}, meta)),
+      el('div', { class: 'task-title' },
+        el('div', { title: t.title }, t.title),
+        el('small', {}, level ? el('span', { class: `pill level ${level}`, title: `Complexity ${level}: ${t.complexity.reason || ''}` }, level) : null, level ? ' ' : null, meta),
+        t.waiting ? el('small', { class: 'task-wait' }, `Waiting: ${t.waiting}`) : null),
       end);
   }));
 }

@@ -296,9 +296,39 @@ pub struct Shared {
     pub config: Mutex<Config>,
     pub jobs: Jobs,
     pub data_dir: Option<std::path::PathBuf>,
+    /// The AI's complexity guess for the Hyde Code task it just routed: (task words, level).
+    /// Kept here because the command matcher normalises text and would drop a marker.
+    pub code_level: Mutex<Option<(String, String)>>,
+}
+
+/// Lower-case words only, for matching a routed task with the task that later runs.
+fn word_key(text: &str) -> String {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl Shared {
+    /// Remembers the AI's level guess for a routed `hyde code …` command.
+    pub fn set_code_level(&self, command: &str, level: Option<String>) {
+        if let Ok(mut slot) = self.code_level.lock() {
+            *slot = level.map(|l| (word_key(command), l));
+        }
+    }
+
+    /// The level guess, if it was made for this task text (taken once).
+    pub fn take_code_level(&self, task_text: &str) -> Option<String> {
+        let mut slot = self.code_level.lock().ok()?;
+        let (key, _) = slot.as_ref()?;
+        let task = word_key(task_text);
+        if task.is_empty() || !key.contains(&task) {
+            return None;
+        }
+        slot.take().map(|(_, level)| level)
+    }
+
     pub fn ai_config(&self) -> crate::config::AiConfig {
         self.config
             .lock()
@@ -468,13 +498,21 @@ fn route_with_ai(
     catalogue: &str,
     chat: &[Message],
 ) -> Reply {
-    match llm::route(ai, catalogue, chat, input) {
+    // Only in assistant-plans mode may this (free or cheap) model write coding instructions;
+    // otherwise it routes the owner's words and Hyde Code's strong planner writes them.
+    let coding = match hydecode::routing_mode(&hydecode::discover()).as_deref() {
+        Some("assistant-plans") => llm::Coding::Plan,
+        _ => llm::Coding::Route,
+    };
+    match llm::route(ai, catalogue, chat, input, coding) {
         Ok(Route::Answer(text)) => {
             let mut reply = Reply::new(input, Status::Answer, text);
             reply.source = "ai";
             reply
         }
         Ok(Route::Command(command)) => {
+            let (command, level) = hydecode::split_level(&command);
+            shared.set_code_level(&command, level);
             let plan = shared.agent.lock().expect("agent lock").plan(&command);
             let low_risk = plan.tasks.iter().all(|task| matches!(task.risk, Risk::L0));
             match plan.decision {
@@ -825,7 +863,8 @@ fn run_task(shared: &Shared, task: &Task) -> RunResult {
                 .lock()
                 .map(|c| c.code.default_project.clone())
                 .unwrap_or_default();
-            match code_task(&text, None, None, &default) {
+            let level = shared.take_code_level(&text);
+            match code_task(&text, None, None, level.as_deref(), &default) {
                 Ok(message) => RunResult::ok(message),
                 Err(error) => RunResult::err(error),
             }
@@ -1040,8 +1079,11 @@ pub fn code_task(
     text: &str,
     project: Option<&str>,
     agent: Option<&str>,
+    level: Option<&str>,
     default_project: &str,
 ) -> Result<String, String> {
+    let (text, marker) = hydecode::split_level(text);
+    let level = level.map(str::to_owned).or(marker);
     let text = text.trim().trim_start_matches('/').trim();
     if text.len() < 3 {
         return Err(
@@ -1095,6 +1137,7 @@ pub fn code_task(
             &body,
             Some(&project_id),
             agent_tag.as_deref(),
+            level.as_deref(),
             &request_id,
         ) {
             Ok(task) => Ok(format!(
@@ -1175,6 +1218,30 @@ mod tests {
 
     fn agent() -> Agent {
         Agent::new(load_pack(None).expect("built-in pack compiles"))
+    }
+
+    #[test]
+    fn hands_the_ai_level_guess_to_the_matching_code_task_once() {
+        let shared = Shared {
+            agent: Mutex::new(agent()),
+            config: Mutex::new(Config::default()),
+            jobs: Jobs::default(),
+            data_dir: None,
+            code_level: Mutex::new(None),
+        };
+        shared.set_code_level(
+            "hyde code Tidy up the README in my site",
+            Some("low".into()),
+        );
+        assert_eq!(shared.take_code_level("something else"), None);
+        assert_eq!(
+            shared.take_code_level("tidy up the readme in my site"),
+            Some("low".into())
+        );
+        assert_eq!(
+            shared.take_code_level("tidy up the readme in my site"),
+            None
+        );
     }
 
     fn decide(agent: &Agent, text: &str) -> (Decision, Vec<String>) {

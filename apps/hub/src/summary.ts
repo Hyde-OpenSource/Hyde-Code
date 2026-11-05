@@ -1,4 +1,4 @@
-import { TERMINAL_STATUSES, type HarnessState, type TaskStatus } from '@hyde/core';
+import { TERMINAL_STATUSES, type Complexity, type HarnessState, type TaskStatus } from '@hyde/core';
 import { accountQuota, type AgentPool } from './agents.ts';
 import type { HubConfig } from './config.ts';
 
@@ -6,7 +6,18 @@ import type { HubConfig } from './config.ts';
 // clients. /api/state returns the whole history; this stays the same size as work piles up.
 
 export type NeedsYou =
-  | { kind: 'question'; id: string; taskId: string; taskTitle: string; projectId: string; text: string; options: string[]; blocking: boolean }
+  | {
+      kind: 'question';
+      id: string;
+      taskId: string;
+      taskTitle: string;
+      projectId: string;
+      text: string;
+      options: string[];
+      blocking: boolean;
+      /** Other agents or tasks that asked the same thing; one answer reaches all of them. */
+      alsoAskedBy: { by: string; taskId: string }[];
+    }
   | { kind: 'approval'; id: string; taskId?: string; taskTitle?: string; projectId?: string; approvalKind: string; summary: string }
   | { kind: 'merge'; taskId: string; taskTitle: string; projectId: string; prUrl: string };
 
@@ -26,8 +37,22 @@ export interface AgentHeadroom {
   resetsAt?: number;
 }
 
+/** An active task with its complexity tier and where its latest run went (API v2). */
+export interface ActiveTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  projectId: string;
+  complexity?: { level: Complexity; by: string; reason: string; confident: boolean };
+  waiting?: string;
+  /** `model` is what the CLI reported running; `requestedModel` what the hub asked for (tier). */
+  run?: { agent: string; mode: string; tier?: Complexity; model?: string; requestedModel?: string; effort?: string; running: boolean };
+}
+
 export interface Summary {
   lastSeq: number;
+  routing: { mode: string; effort: string };
+  tasks: ActiveTask[];
   counts: {
     tasks: Partial<Record<TaskStatus, number>>;
     active: number;
@@ -52,7 +77,8 @@ export function buildSummary(state: HarnessState, config: HubConfig, pool: Agent
     .filter((q) => q.status === 'open' && live.has(q.taskId))
     .map((q) => {
       const t = live.get(q.taskId)!;
-      return { kind: 'question', id: q.id, taskId: q.taskId, taskTitle: t.title, projectId: t.projectId, text: q.text, options: q.options ?? [], blocking: q.blocking };
+      const alsoAskedBy = [...new Map(q.matches.map((m) => [`${m.by}|${m.taskId}`, { by: m.by, taskId: m.taskId }])).values()];
+      return { kind: 'question', id: q.id, taskId: q.taskId, taskTitle: t.title, projectId: t.projectId, text: q.text, options: q.options ?? [], blocking: q.blocking, alsoAskedBy };
     });
   const approvals: NeedsYou[] = [...state.approvals.values()]
     .filter((a) => a.status === 'open' && (a.taskId ? live.has(a.taskId) : !projectId))
@@ -83,8 +109,36 @@ export function buildSummary(state: HarnessState, config: HubConfig, pool: Agent
     };
   });
 
+  const active = [...live.values()]
+    .sort((a, b) => b.createdSeq - a.createdSeq)
+    .slice(0, 20)
+    .map((t): ActiveTask => {
+      const run = t.runIds.length ? state.runs.get(t.runIds.at(-1)!) : undefined;
+      return {
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        projectId: t.projectId,
+        ...(t.complexity && { complexity: { level: t.complexity.level, by: t.complexity.by, reason: t.complexity.reason, confident: t.complexity.confident } }),
+        ...(t.waiting && { waiting: t.waiting }),
+        ...(run && {
+          run: {
+            agent: run.agent,
+            mode: run.mode,
+            running: run.state === 'running',
+            ...(run.tier && { tier: run.tier }),
+            ...((run.model ?? run.requestedModel) && { model: run.model ?? run.requestedModel }),
+            ...(run.requestedModel && { requestedModel: run.requestedModel }),
+            ...(run.effort && { effort: run.effort }),
+          },
+        }),
+      };
+    });
+
   return {
     lastSeq: state.lastSeq,
+    routing: { mode: config.routing.mode, effort: config.routing.effort },
+    tasks: active,
     counts: {
       tasks: byStatus,
       active: live.size,

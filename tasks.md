@@ -75,11 +75,12 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO
+- **Status:** DONE
 - **Priority:** medium
 - **Files / area:** apps/desktop/**, apps/hub/src/http.ts, docs/HYDE_AI.md, docs/api.md
 - **Done when:** The desktop assistant sends requests to the hub with the tier/mode information (it can suggest a complexity level; the hub's rules have the final say). Its own free/cheap model is used only to understand the request and route it, never to write the coding instructions in `balanced` mode. It shows the complexity, the chosen agent and model, and open questions without duplicates. The hub API version is bumped and docs/api.md updated for any API change.
 - **Notes:**
+  - 2026-11-05: API v2; desktop routes only (no instruction writing) except in assistant-plans; level hint; Hyde Code tab shows level, agent, model, waits and one card per question. Live-checked against a scratch v2 hub. Screenshots come with T-006.
 
 ## T-006: End-to-end proof and docs
 - **Assigned to:** agent-hyde-autonomy
@@ -93,6 +94,72 @@
 - **Notes:**
 
 
+
+## T-007: Skills for every agent
+- **Assigned to:** agent-hyde-autonomy
+- **Assigned by / date:** main on 2026-11-05
+- **Repeats:** once
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **Status:** TODO (start after T-006)
+- **Priority:** medium
+- **Files / area:** packages/skills (new), apps/hub/**, packages/mcp-harness/**, packages/devflow/**, apps/web (Skills page)
+- **Done when:** docs/roadmap-v2.md section 2 is built: SKILL.md discovery from built-in, user and project folders; per-run delivery into each CLI's real skill folder (paths checked against the installed CLI versions); planner picks skills per task; propose_skill tool with owner approval; Skills page; tests and a real run showing a Claude and an OpenCode run each using a project skill.
+- **Notes:**
+
+## T-008: Live browser feed with cursor and click overlay
+- **Assigned to:** agent-hyde-autonomy
+- **Assigned by / date:** main on 2026-11-05
+- **Repeats:** once
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **Status:** TODO (start after T-006)
+- **Priority:** medium
+- **Files / area:** packages/browser-live (new), apps/hub/src/browser.ts, http.ts, orchestrator.ts, apps/web (task page, office)
+- **Done when:** docs/roadmap-v2.md section 3 is built: hyde-browser MCP server, CDP screencast frames on a live channel, an overlay drawn in the dashboard (arrow cursor, ripple, element box, caption, step timeline), pause/take over/stop, recordings saved as artifacts, preview server per worktree, approval for side effects on non-local sites. Verified with a real agent run on a scratch web app plus Playwright screenshots at 1440 and 390 px.
+- **Notes:**
+
+## T-009: Live activity timeline, todos and plan mode
+- **Assigned to:** agent-hyde-autonomy
+- **Assigned by / date:** main on 2026-11-05
+- **Repeats:** once
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **Status:** TODO (start after T-006)
+- **Priority:** medium
+- **Files / area:** apps/hub/**, packages/mcp-harness/**, packages/core/**, apps/web, apps/hub/src/tui*.ts
+- **Done when:** docs/roadmap-v2.md section 4 is built: one timeline per task (tool calls, commands, diffs, model/tier, tokens/cost), update_todos MCP tool shown live, optional plan-then-build with owner approval (default on for high complexity), files-touched list. Tests and screenshots.
+- **Notes:**
+
+## T-010: Diff comments, checkpoints, commands, export
+- **Assigned to:** agent-hyde-autonomy
+- **Assigned by / date:** main on 2026-11-05
+- **Repeats:** once
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **Status:** TODO (start after T-006)
+- **Priority:** medium
+- **Files / area:** apps/hub/**, packages/workspace/**, apps/web
+- **Done when:** docs/roadmap-v2.md section 5 is built and tested: inline diff comments start a review_fix turn, a checkpoint per turn with undo, .hyde/commands templates shared by every intake, session export with secrets redacted.
+- **Notes:**
+
+## T-011: Permissions, project memory, agent notes, issue sources
+- **Assigned to:** agent-hyde-autonomy
+- **Assigned by / date:** main on 2026-11-05
+- **Repeats:** once
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **Status:** TODO (start after T-006)
+- **Priority:** medium
+- **Files / area:** apps/hub/**, packages/policy/**, packages/adapters/**, apps/web
+- **Done when:** docs/roadmap-v2.md section 6 is built and tested. GitHub issue intake is tested only against a scratch repo the owner approves (ask main first). The auto-reviewer runs only on a strong tier.
+- **Notes:**
+
+## T-012: Telegram bot update
+- **Assigned to:** agent-hyde-autonomy
+- **Assigned by / date:** main on 2026-11-05
+- **Repeats:** once
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **Status:** TODO (start after T-006)
+- **Priority:** medium
+- **Files / area:** packages/gateways/telegram/**, packages/core (commands), apps/hub/**
+- **Done when:** docs/roadmap-v2.md section 7 is built: token-once pairing with a t.me start link, one edited live message per task, /live with cursor-annotated frames, /mode /effort /tier /skills /plan /diff /undo /todos /memory, merged duplicate questions. Unit tests with grammY fakes; a live test only if the owner gives a test bot token (ask main).
+- **Notes:**
 
 ## Done
 <!-- Move finished tasks here. -->

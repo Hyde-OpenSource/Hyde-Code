@@ -18,6 +18,15 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-11-05: Hyde AI assistant as the front desk, hub API v2 (T-005)
+- **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **What:** Hub: `API_VERSION` 2 (additive). `POST /api/tasks` takes a `complexity` hint and returns `complexity`; `POST /api/tasks/:id/level` (owner and client tokens; `/level` added to client commands); `/api/summary` gains `routing`, `tasks` (up to 20 active tasks with complexity, waiting reason and latest run: agent, tier, requested and reported model, effort) and `needsYou[].alsoAskedBy`. In the `assistant-plans` mode Hyde AI requests skip the hub planner. Desktop: the assistant's own AI model now only routes coding requests (passes the owner's words through, plus an optional level guess) unless the hub says `assistant-plans`, where it writes the precise task; the guess goes to v2 hubs as the `complexity` hint (carried in shared state, because the command matcher normalises text); the Hyde Code tab shows a level pill, agent, model and effort per task, why a task waits, and "Also asked by …" on a question (one card per id); voice status lists tiers and linked questions. docs/api.md and docs/HYDE_AI.md §3 updated.
+- **Why:** T-005: the assistant is the front desk; its free model must not write coding instructions in balanced mode; show complexity, agent, model and questions without duplicates.
+- **Files:** apps/hub/src/{summary,version,orchestrator,http,clients,client-api.test}.ts, apps/desktop/crates/hyde-ai/src/{llm,hydecode,agent,main,server}.rs, apps/desktop/crates/hyde-ai/ui/{app.js,style.css}, docs/api.md, docs/HYDE_AI.md
+- **Verified:** `pnpm typecheck` clean, `pnpm test` 196/196 (new v2 tests: hint vs confident rules, level route incl. 404/400, summary routing/tasks/run tier, one question with alsoAskedBy, assistant-plans skips the planner); `pnpm desktop:test` 24/24 (level marker parsing, routing-only prompt rule, hint hand-off, route labels, status text), `pnpm desktop:lint` clean. Live: scratch v2 hub (`command` agent, scratch HYDE_HOME and XDG_CONFIG_HOME, port 7492): `hyde-ai run` created tasks (rules gave trivial for a rename, "a guess" for a vague one), the client token sent a `low` hint (recorded `by: client`), changed T-3 to high (`by: owner`), and `/api/summary` showed apiVersion 2, routing and per-task tiers. Scratch hub stopped and deleted.
+- **Open / follow-ups:** The AI level guess path needs a configured AI engine, so it was unit-tested, not run live. Desktop and dashboard screenshots are in T-006.
+
 ### 2026-11-05: Fix what fails in real runs (T-004)
 - **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
 - **Branch:** agent-hyde-autonomy/feature/smart-routing

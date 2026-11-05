@@ -1,7 +1,13 @@
 # Hub client API
 
-The API that local apps (Hyde AI, scripts) use to drive the hub. **API version 1.** Breaking
-changes bump `apiVersion` in `GET /api/health`, so clients can warn on a mismatch. Code:
+The API that local apps (Hyde AI, scripts) use to drive the hub. **API version 2** (2026-11-05;
+v1 plus complexity tiers, all additive: a v1 client keeps working). Changes bump `apiVersion` in
+`GET /api/health`, so clients can warn on a mismatch or turn features on.
+
+**v2 adds:** a `complexity` hint on `POST /api/tasks` and `complexity` in its reply;
+`POST /api/tasks/:id/level`; `routing`, `tasks` and `needsYou[].alsoAskedBy` in `/api/summary`;
+the `/level` command for client tokens; new event types `task.classified`, `task.waiting`,
+`task.reassigned`, `question.matched`; `tier`, `model`, `effort`, `why` on `run.dispatched`. Code:
 `apps/hub/src/http.ts`, `summary.ts`, `clients.ts`; tests: `client-api.test.ts`.
 
 The hub listens on `127.0.0.1` only.
@@ -11,7 +17,7 @@ The hub listens on `127.0.0.1` only.
 1. Read `$HYDE_HOME/hub.json` (default `~/.hyde/hub.json`). The running hub writes it on start
    and removes it on a clean stop:
    ```json
-   { "url": "http://127.0.0.1:7420", "pid": 12345, "version": "0.0.0", "apiVersion": 1,
+   { "url": "http://127.0.0.1:7420", "pid": 12345, "version": "0.0.0", "apiVersion": 2,
      "dataDir": "/home/you/.hyde/data", "startedAt": "2026-10-30T00:00:00.000Z" }
    ```
    If the file is missing, or `pid` is not alive, the hub is not running (a crash can leave a
@@ -25,7 +31,7 @@ Send `Authorization: Bearer <token>`.
 | Token | File | Can |
 |---|---|---|
 | Owner | `<dataDir>/owner-token` | Everything, including config, projects and trust, `/promote`, lessons, dashboard login. |
-| Client `hyde-ai` | `<dataDir>/clients/hyde-ai.token` | Read: `/api/state`, `/api/summary`, `/api/events`, `/api/feed`, `/api/tasks/:id/events`, `/api/tasks/:id/diff`. Write: `POST /api/tasks`, answer questions, approve or deny (not `promote` approvals), and the chat commands `/new /answer /approve /deny /stop /retry /merge /status /agents /usage /projects /logs /help`. |
+| Client `hyde-ai` | `<dataDir>/clients/hyde-ai.token` | Read: `/api/state`, `/api/summary`, `/api/events`, `/api/feed`, `/api/tasks/:id/events`, `/api/tasks/:id/diff`. Write: `POST /api/tasks`, answer questions, approve or deny (not `promote` approvals), and the chat commands `/new /answer /approve /deny /stop /retry /merge /level /status /agents /usage /projects /logs /help`; `POST /api/tasks/:id/level`. |
 
 The client token is created (0600) when the hub starts. To rotate it, delete the file and run
 `hyde hub restart`. Anything a client may not do returns **401** (route not open to clients) or
@@ -44,21 +50,32 @@ answered or decided), `forbidden` (403).
 ## Endpoints
 
 ### `GET /api/health` (no auth)
-`{"ok": true, "version": "0.0.0", "apiVersion": 1}`
+`{"ok": true, "version": "0.0.0", "apiVersion": 2}`. While a hub is starting it answers **503**
+(it claims the port before anything else, so a second hub exits with "already running").
 
 ### `POST /api/tasks`
 ```json
-{ "text": "add a dark mode toggle", "project": "Gamify IAS LMS", "agent": "codex-1", "requestId": "voice-8f1c" }
+{ "text": "add a dark mode toggle", "project": "Gamify IAS LMS", "agent": "codex-1", "requestId": "voice-8f1c", "complexity": "medium" }
 ```
 - `text` (required). `project`: id or name, matched ignoring case, spaces, `-`, `_` and `.`;
   optional when there is one project. `agent`: pins the task to that agent. `requestId`:
   optional; a repeat with the same id creates nothing and returns 409 `duplicate`.
 - `source`: owner token only, one of `api` (default), `cli`, `hyde-ai`. A client token always
   records its own name.
-- **201** `{"id": "T-12", "status": "clarifying", "projectId": "gamify-ias-lms", "title": "...", "text": "<chat reply>"}`
+- `complexity` (v2, optional): the client's guess, one of `trivial`, `low`, `medium`, `high`. The
+  hub's rules decide; the hint only settles a request the rules can't place (`by: "client"`).
+- **201** `{"id": "T-12", "status": "clarifying", "projectId": "gamify-ias-lms", "title": "...",
+  "complexity": {"level": "medium", "by": "rules", "reason": "feature or fix (\"add\")", "confident": true, "seq": 40},
+  "text": "<chat reply>"}`
 
 Tasks from `hyde-ai` always go through the planner's clarify step when some usable agent has the
 `plan` role, even with the planner switched off; otherwise they start normally and `text` says so.
+In the `assistant-plans` routing mode they skip the hub's planner instead: the desktop assistant
+already turned the request into a task.
+
+### `POST /api/tasks/:id/level` (v2)
+`{"level": "high"}` → **200** `{"id": "T-12", "complexity": {"level": "high", "by": "owner", ...}, "text": "<chat reply>"}`.
+The task's next run uses that tier. 404 `not_found`, 400 `invalid`.
 
 ### `POST /api/questions/:id/answer`
 `{"text": "use the existing toggle"}` or `{"option": 0}` (index into the question's `options`).
@@ -72,12 +89,20 @@ Tasks from `hyde-ai` always go through the planner's clarify step when some usab
 Small, bounded answer to "what's going on and what needs me":
 ```json
 {
-  "version": "0.0.0", "apiVersion": 1, "lastSeq": 812,
+  "version": "0.0.0", "apiVersion": 2, "lastSeq": 812,
+  "routing": { "mode": "balanced", "effort": "balanced" },
+  "tasks": [
+    { "id": "T-12", "title": "...", "status": "running", "projectId": "app",
+      "complexity": { "level": "medium", "by": "planner", "reason": "...", "confident": true },
+      "run": { "agent": "claude-1", "mode": "start", "tier": "medium", "requestedModel": "sonnet",
+               "model": "claude-sonnet-x", "effort": "medium", "running": true } }
+  ],
   "counts": { "tasks": { "running": 1, "blocked": 1, "done": 9 }, "active": 2, "runningRuns": 1,
               "questions": 1, "approvals": 0, "merges": 1, "needsYou": 2 },
   "needsYou": [
     { "kind": "question", "id": "Q-3", "taskId": "T-12", "taskTitle": "...", "projectId": "app",
-      "text": "Paginate?", "options": ["yes", "no"], "blocking": true },
+      "text": "Paginate?", "options": ["yes", "no"], "blocking": true,
+      "alsoAskedBy": [{ "by": "codex-1", "taskId": "T-13" }] },
     { "kind": "approval", "id": "A-2", "taskId": "T-11", "taskTitle": "...", "projectId": "app",
       "approvalKind": "first-push", "summary": "..." },
     { "kind": "merge", "taskId": "T-9", "taskTitle": "...", "projectId": "app", "prUrl": "https://github.com/..." }
@@ -89,6 +114,10 @@ Small, bounded answer to "what's going on and what needs me":
   "quotaSoftCeiling": 0.8
 }
 ```
+`tasks` (v2) lists up to 20 active tasks, newest first, with their complexity and their latest
+run (`requestedModel` is the tier's model, `model` what the CLI reported; `waiting` says why the
+router holds a task back, e.g. its tier is out of quota). A question that several agents or tasks
+asked appears once, with `alsoAskedBy`; one answer reaches all of them.
 Questions and approvals of finished or cancelled tasks are left out. `nearCeiling` means new runs
 on that agent wait; `blocked` (e.g. `"five_hour limit reached"`) means a window is used up.
 `resetsAt` is unix seconds for the fullest window, when known.
@@ -127,6 +156,10 @@ Record `type`s useful for notifications (payload fields in `packages/core/src/ev
 | `approval.decided` | `approvalId, approved, by` |
 | `incident.raised` | `incidentId, taskId?, about, evidence` |
 | `quota.updated` | `account, window, status, utilization?, resetsAt?` |
+| `task.classified` (v2) | `taskId, level, by (rules, model, planner, client, owner, harness), reason, confident` |
+| `task.waiting` (v2) | `taskId, reason` (its tier is out of quota or unavailable; it waits rather than drop to a weaker model) |
+| `task.reassigned` (v2) | `taskId, from, reason` (moved off an agent; the worktree stays) |
+| `question.matched` (v2) | `questionId, taskId, runId, text, status (open, answered), score, by, blocking` (a repeat of an earlier question) |
 
 Other types (`run.event`, `run.dispatched`, `agent.progress`, …) are frequent; skip what you
 don't use.
