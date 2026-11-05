@@ -45,3 +45,8 @@ Short version of the rules:
 - 2026-10-30: Desktop commands in tests act on the real desktop (opening apps, volume); test with plan-only checks or harmless intents.
 
 <!-- devflow:end -->
+- 2026-11-06: Run a real end-to-end test before calling routing work done; a rules bug and a review-tier gap only showed up on real tasks.
+- 2026-11-06: After a rate limit, keep the known reset time; never overwrite it with a guess.
+- 2026-11-06: Claim the hub port before any side effect (event store, hooks, chat polling).
+- 2026-11-06: Playwright MCP saves screenshots into the session's working copy; move them out at once and delete `.playwright-mcp` afterwards.
+- 2026-11-06: Pass hints to the desktop command matcher alongside the text; it normalises text, so markers inside it are lost.

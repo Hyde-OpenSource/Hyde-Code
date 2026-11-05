@@ -18,6 +18,15 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-11-06: Apply the owner's answers Q-001..Q-004 (Codex tiers)
+- **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **What:** Added the built-in Codex tier table the owner chose: high gpt-6-astra/high, medium gpt-6.1-sol/medium, low and trivial gpt-6-luna/low. Answers Q-002 (every opencode/* model is free), Q-003 (built-in Claude tiers replace the single haiku, opus for high) and Q-004 (Hyde effort changes effort only; balanced/balanced defaults) already matched what was built. README tier table and context.md now show Codex. Committed main's AgentAnswers.md, AgentQuestions.md and CLAUDE.md (lessons) edits with this change.
+- **Why:** Owner's answers, relayed by main on 2026-11-06.
+- **Files:** packages/core/src/routing.ts, apps/hub/src/routing.test.ts, README.md, context.md, AgentAnswers.md, AgentQuestions.md, CLAUDE.md
+- **Verified:** Ids checked against the installed Codex 0.162.1. `gpt-6-luna` is in `codex debug models`. `gpt-6-astra` (the configured default) and `gpt-6.1-sol` (an availability notice) appear verbatim in ~/.codex/config.toml but not in the catalog, so they are used as the owner gave them and are not run-verified (no Codex runs in my role). `pnpm typecheck` clean, `pnpm test` 208/208, including new assertions for the Codex table and a Codex review on gpt-6-astra/high.
+- **Open / follow-ups:** The first real Codex run on high or medium work will show whether astra and sol are available on the owner's account.
+
 ### 2026-11-06: Skills for every agent (T-007)
 - **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
 - **Branch:** agent-hyde-autonomy/feature/smart-routing

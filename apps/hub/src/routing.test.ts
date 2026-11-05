@@ -53,9 +53,10 @@ describe('tiers and effort', () => {
     expect(tierFor({ low: { model: 'haiku' } }, 'high')).toBeUndefined();
   });
 
-  it('gives claude-code opus/sonnet/haiku by default and keeps one model elsewhere', () => {
+  it('gives claude-code opus/sonnet/haiku and codex astra/sol/luna by default, and keeps one model elsewhere', () => {
     expect(tierTable({ adapter: 'claude-code', model: 'haiku' }).high).toEqual({ model: 'opus', effort: 'high' });
-    expect(tierTable({ adapter: 'codex', model: 'gpt-x', effort: 'medium' })).toEqual({
+    expect(tierTable({ adapter: 'codex' })).toMatchObject({ high: { model: 'gpt-6-astra' }, medium: { model: 'gpt-6.1-sol' }, low: { model: 'gpt-6-luna' }, trivial: { model: 'gpt-6-luna' } });
+    expect(tierTable({ adapter: 'acp', model: 'gpt-x', effort: 'medium' })).toEqual({
       trivial: { model: 'gpt-x', effort: 'medium' },
       low: { model: 'gpt-x', effort: 'medium' },
       medium: { model: 'gpt-x', effort: 'medium' },
@@ -107,7 +108,7 @@ describe('router by mode and tier', () => {
     expect(go('medium', 'plan')).toMatchObject({ agent: 'claude-1', model: 'opus' });
     expect(go('low', 'plan')).toMatchObject({ agent: 'claude-1', model: 'sonnet' });
     // Review: a different vendor that has the review role, never the free model.
-    expect(go('high', 'review')).toMatchObject({ agent: 'codex-1' });
+    expect(go('high', 'review')).toMatchObject({ agent: 'codex-1', model: 'gpt-6-astra', effort: 'high' });
   });
 
   it('claude-only: no other vendors, and Claude may review its own work in a fresh session', () => {

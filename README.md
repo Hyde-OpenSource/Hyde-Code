@@ -174,16 +174,18 @@ counts only when the rules can't tell. You can change it any time with `/level T
 buttons on the task page, or `POST /api/tasks/:id/level`. Trivial tasks skip the planner.
 
 **Models per tier.** Each agent maps the four levels to a model and an effort (`tiers` in the
-config, or the tier editor in Settings). Claude Code has them built in:
+config, or the tier editor in Settings). Claude Code and Codex have them built in:
 
-| Level | Claude model | Effort | Used for |
-|---|---|---|---|
-| high | opus | high | high coding; planning and review of medium and high work |
-| medium | sonnet | medium | medium coding; planning and review of trivial and low work |
-| low | haiku | low | low coding |
-| trivial | haiku | low | renames, typos, one-liners |
+| Level | Claude model | Codex model | Effort | Used for |
+|---|---|---|---|---|
+| high | opus | gpt-6-astra | high | high coding; planning and review of medium and high work |
+| medium | sonnet | gpt-6.1-sol | medium | medium coding; planning and review of trivial and low work |
+| low | haiku | gpt-6-luna | low | low coding |
+| trivial | haiku | gpt-6-luna | low | renames, typos, one-liners |
 
-Other adapters use their one `model` for every tier until you add `tiers`. If an agent has no
+A profile's single `model` is not used when a built-in table applies; add `tiers` to change it.
+Every OpenCode `opencode/*` model counts as free. Other adapters use their one `model` for every
+tier until you add `tiers`. If an agent has no
 entry for a level, it uses its next stronger tier, never a weaker one. The hub states every
 upgrade on the run (`why`).
 

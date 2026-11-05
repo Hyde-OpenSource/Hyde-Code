@@ -85,7 +85,7 @@
 - Agent allow rules are per command prefix; compound shell commands (`a && b`) are denied under `--permission-prompts none`. That's safe, and agents retry with separate commands.
 - Progress notes (`report_progress`) are sent immediately, not batched into digests.
 - Question matching is word-based, not semantic: a question reworded with entirely different words is still asked again.
-- Codex has no built-in tier table until the model ids are confirmed (AgentQuestions Q-001); harness Codex runs use `--ignore-user-config`, so `~/.codex/config.toml`'s model isn't applied to them.
+- Codex tiers use gpt-6-astra and gpt-6.1-sol, which the owner chose but `codex debug models` (0.162.1) doesn't list (only gpt-6-luna is there); not run yet. Harness Codex runs use `--ignore-user-config`.
 - The dashboard's `manifest.webmanifest` gives a console syntax error (since c4bfb6c); not looked into yet.
 - Claude Code CLI ships weekly; stream format changes are caught by the fixture tests only after re-recording.
 
@@ -98,7 +98,7 @@
 - Hub modules: agents.ts (pool, router), planner.ts, review.ts, policy-engine.ts, notifier.ts, browser.ts, nodes.ts, schedules.ts, plugins.ts, metrics.ts, setup.ts, detect.ts, http.ts (API + dashboard), orchestrator.ts.
 - Dashboard: apps/web (React + Vite), served by the hub from apps/web/dist; `pnpm hyde dashboard` prints the login link.
 - Local test config: hyde.config.json (gitignored) runs claude-1 (haiku), codex-1, opencode-1 (free model) on this repo with base `staging`.
-- Since 2026-11-05 (branch agent-hyde-autonomy/feature/smart-routing): complexity tiers, modes (balanced, claude-only, free-first, assistant-plans) and Hyde effort (saver, balanced, max, auto); claude-code profiles without `tiers` use opus/sonnet/haiku (so the owner's `"model": "haiku"` is no longer used for everything). See README "Tiers, modes and effort".
+- Since 2026-11-05 (branch agent-hyde-autonomy/feature/smart-routing): complexity tiers, modes (balanced, claude-only, free-first, assistant-plans) and Hyde effort (saver, balanced, max, auto); claude-code profiles without `tiers` use opus/sonnet/haiku (so the owner's `"model": "haiku"` is no longer used for everything), codex profiles use gpt-6-astra/gpt-6.1-sol/gpt-6-luna (owner, 2026-11-06), and every `opencode/*` model counts as free. See README "Tiers, modes and effort".
 
 ## 11. Open questions for the user
 - Telegram bot token and the owner's Telegram user id (or use `/pair`).

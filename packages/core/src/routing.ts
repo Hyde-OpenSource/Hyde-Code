@@ -35,9 +35,11 @@ export interface TierSpec {
 export type TierTable = Partial<Record<Complexity, TierSpec>>;
 
 /**
- * Built-in tier tables, used when a profile has no `tiers`. Only adapters whose model aliases are
- * documented by the CLI itself are listed (`claude --help`: opus, sonnet; haiku). Others keep their
- * single `model` for every tier.
+ * Built-in tier tables, used when a profile has no `tiers`. Claude: the aliases `claude --help`
+ * documents (opus, sonnet; haiku). Codex: ids the owner chose on 2026-11-06 (AgentAnswers Q-001).
+ * gpt-6-luna is in `codex debug models` (0.162.1); gpt-6-astra and gpt-6.1-sol are in the owner's
+ * ~/.codex/config.toml but not in that catalog, so a run on them fails loudly if the account lacks them.
+ * Other adapters keep their single `model` for every tier.
  */
 export const BUILTIN_TIERS: Record<string, TierTable> = {
   'claude-code': {
@@ -45,6 +47,12 @@ export const BUILTIN_TIERS: Record<string, TierTable> = {
     medium: { model: 'sonnet', effort: 'medium' },
     low: { model: 'haiku', effort: 'low' },
     trivial: { model: 'haiku', effort: 'low' },
+  },
+  codex: {
+    high: { model: 'gpt-6-astra', effort: 'high' },
+    medium: { model: 'gpt-6.1-sol', effort: 'medium' },
+    low: { model: 'gpt-6-luna', effort: 'low' },
+    trivial: { model: 'gpt-6-luna', effort: 'low' },
   },
 };
 
