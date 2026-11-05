@@ -119,6 +119,7 @@
 - **Files / area:** packages/browser-live (new), apps/hub/src/browser.ts, http.ts, orchestrator.ts, apps/web (task page, office)
 - **Done when:** docs/roadmap-v2.md section 3 is built: hyde-browser MCP server, CDP screencast frames on a live channel, an overlay drawn in the dashboard (arrow cursor, ripple, element box, caption, step timeline), pause/take over/stop, recordings saved as artifacts, preview server per worktree, approval for side effects on non-local sites. Verified with a real agent run on a scratch web app plus Playwright screenshots at 1440 and 390 px.
 - **Notes:**
+  - 2026-11-06 (agent-hyde-autonomy, stopped before starting: Claude 5-hour window at 68%, T-007 just committed as bcdcdd4). Exact next step: create `packages/browser-live` with a stdio MCP server `hyde-browser` (Playwright 1.x, the one `apps/hub/src/browser.ts` already uses, own Chromium profile) whose tools POST every action to a new hub route `/api/agent/browser` (same per-run token as mcp-harness). Then add it to the run's MCP config next to `hyde` in `orchestrator.dispatch`, and stream `Page.startScreencast` frames on a separate SSE route (`/api/tasks/:id/live`), not the event log. Real runs can use OpenCode's free model to save Claude quota.
 
 ## T-009: Live activity timeline, todos and plan mode
 - **Assigned to:** agent-hyde-autonomy
