@@ -1,5 +1,6 @@
 // The contract every agent CLI adapter implements (docs/plan.md, "How to drive each agent CLI").
 // The orchestrator only ever sees this interface and the normalized HarnessEvent stream.
+import type { Effort, TierTable } from './routing.ts';
 
 export type AdapterKind = 'claude-code' | 'codex' | 'opencode' | 'acp' | 'command' | (string & {});
 
@@ -32,7 +33,7 @@ export interface RunSpec {
   mcp?: McpServerSpec;
   model?: string;
   /** Reasoning effort, where the CLI supports it. */
-  effort?: 'low' | 'medium' | 'high';
+  effort?: Effort;
   /** Tool patterns the agent may never use (compiled from the permission profile). */
   deny?: string[];
   /** Tool patterns the agent may use without a prompt. */
@@ -107,7 +108,9 @@ export interface AgentProfile {
   adapter: AdapterKind;
   enabled: boolean;
   model?: string;
-  effort?: 'low' | 'medium' | 'high';
+  effort?: Effort;
+  /** Model and effort per complexity level; without it the adapter's built-in table or `model` is used. */
+  tiers?: TierTable;
   /** Roles this agent is good at; the router prefers matches. */
   roles: string[];
   /** Concurrent runs for this agent's account. */

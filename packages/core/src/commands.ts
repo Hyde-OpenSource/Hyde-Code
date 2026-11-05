@@ -49,6 +49,11 @@ export function parseCommand(text: string): Command | null {
       const id = taskArg();
       return id ? { kind: 'retry', taskId: id } : { kind: 'help' };
     }
+    case 'level': {
+      // /level T-3 high: the owner sets a task's complexity tier.
+      const m = /^(T-\d+)\s+(trivial|low|medium|high)$/i.exec(rest);
+      return m ? { kind: 'level', taskId: m[1]!.toUpperCase(), level: m[2]!.toLowerCase() as 'trivial' | 'low' | 'medium' | 'high' } : { kind: 'help' };
+    }
     case 'promote': {
       const tag = /^#?([\w.-]+)$/.exec(rest);
       return tag ? { kind: 'promote', project: tag[1]! } : rest ? { kind: 'help' } : { kind: 'promote' };
@@ -83,6 +88,7 @@ export const HELP_TEXT = [
   '/logs T-3: the latest activity of a task',
   '/stop T-3, /stop all: interrupt runs cleanly',
   '/retry T-3: try a failed task again',
+  '/level T-3 high: set a task\'s complexity (trivial, low, medium, high); its next run uses that tier',
   '/answer Q-2 <text>: answer a question (or tap a button, or reply to the question)',
   '/approve A-1, /deny A-1: decide an approval (also L-1 for lessons)',
   '/merge T-3: merge a finished task into its base branch (staging)',

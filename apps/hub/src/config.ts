@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import type { AgentProfile } from '@hyde/core';
+import { COMPLEXITY_LEVELS, EFFORT_LEVELS, HYDE_EFFORTS, ROUTING_MODES, type AgentProfile } from '@hyde/core';
 import { z } from 'zod';
 import { homePaths } from './home.ts';
 
@@ -11,13 +11,26 @@ import { homePaths } from './home.ts';
 
 const ROLES = ['plan', 'implement', 'review', 'ui', 'bulk', 'triage'] as const;
 
+const tierSchema = z.object({
+  model: z.string().optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+  /** Marks a free model (OpenCode's opencode/* models are free by default). */
+  free: z.boolean().optional(),
+});
+
 const agentSchema = z.object({
   name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
   /** claude-code, codex, opencode, acp, command, or a kind a plugin registers. */
   adapter: z.string().min(1),
   enabled: z.boolean().default(true),
   model: z.string().optional(),
-  effort: z.enum(['low', 'medium', 'high']).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+  /**
+   * Model and effort per complexity level, e.g. { "high": { "model": "opus", "effort": "high" } }.
+   * A level without an entry uses the next stronger one. Without `tiers`, claude-code uses
+   * opus/sonnet/haiku and other adapters use `model` for every level.
+   */
+  tiers: z.partialRecord(z.enum(COMPLEXITY_LEVELS), tierSchema).optional(),
   roles: z.array(z.string()).default(['plan', 'implement', 'review', 'ui']),
   maxConcurrent: z.number().int().min(1).max(5).default(1),
   account: z.string().optional(),
@@ -91,8 +104,20 @@ const configSchema = z.object({
       enabled: z.boolean().default(false),
       /** Plans with more subtasks than this, or any size L task, wait for the owner's approval. */
       approvalOver: z.number().int().min(1).default(3),
+      /** Most questions one plan may ask; the planner states assumptions for everything else. */
+      maxQuestions: z.number().int().min(0).max(10).default(3),
     })
-    .default({ enabled: false, approvalOver: 3 }),
+    .default({ enabled: false, approvalOver: 3, maxQuestions: 3 }),
+  routing: z
+    .object({
+      /** balanced, claude-only, free-first or assistant-plans (docs: README "Tiers, modes and effort"). */
+      mode: z.enum(ROUTING_MODES).default('balanced'),
+      /** Hub-wide effort: saver, balanced, max or auto. */
+      effort: z.enum(HYDE_EFFORTS).default('balanced'),
+      /** Ask a cheap model when the rules can't tell a task's complexity (and no planner runs). */
+      classifier: z.boolean().default(true),
+    })
+    .default({ mode: 'balanced', effort: 'balanced', classifier: true }),
   review: z
     .object({
       enabled: z.boolean().default(false),

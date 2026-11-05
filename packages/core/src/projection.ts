@@ -1,4 +1,5 @@
 import type { ApprovalKind, HarnessEventRecord, ReviewFinding, RunMode, SourceKind, TaskStatus } from './events.ts';
+import type { Classifier, Complexity, Effort } from './routing.ts';
 
 // Current state, derived only from the event log. `apply` is pure: replaying the same
 // events always yields the same state.
@@ -25,6 +26,15 @@ export interface TaskView {
   size?: 'S' | 'M' | 'L';
   /** Agent profile pinned at creation (optional). */
   pinnedAgent?: string;
+  /** Complexity level and who decided it (latest wins; history keeps the trail). */
+  complexity?: { level: Complexity; by: Classifier; reason: string; confident: boolean; seq: number };
+  complexityHistory: { level: Complexity; by: Classifier; reason: string; seq: number }[];
+  /** A client's suggested level (Hyde AI); advisory only. */
+  complexityHint?: Complexity;
+  /** Why the router is holding the task back (cleared when a run starts). */
+  waiting?: string;
+  /** Planner assumptions the owner can see and change. */
+  assumptions: string[];
   /** Agent profile that owns the worktree. */
   agent?: string;
   node?: string;
@@ -54,6 +64,11 @@ export interface RunView {
   agent: string;
   node: string;
   mode: RunMode;
+  /** Tier, model and effort the hub asked for (model is replaced by the CLI's own report on start). */
+  tier?: Complexity;
+  requestedModel?: string;
+  effort?: Effort;
+  why?: string;
   dispatchedSeq: number;
   startedTs: string;
   state: 'running' | 'exited';
@@ -87,6 +102,8 @@ export interface QuestionView {
   answer?: string;
   answeredSeq?: number;
   answeredBy?: string;
+  /** Later asks (any agent, any task) that matched this question instead of creating a new one. */
+  matches: { taskId: string; runId: string; text: string; by: string; ts: string }[];
 }
 
 export interface ApprovalView {
@@ -204,6 +221,8 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         dependsOn: p.dependsOn,
         runIds: [],
         attempts: 0,
+        complexityHistory: [],
+        assumptions: [],
         reviews: [],
         artifactIds: [],
         statusHistory: [],
@@ -212,7 +231,13 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         ...(p.role && { role: p.role }),
         ...(p.size && { size: p.size }),
         ...(p.agent && { pinnedAgent: p.agent }),
+        ...(p.complexityHint && { complexityHint: p.complexityHint }),
       });
+      if (p.complexity) {
+        const t = state.tasks.get(p.taskId)!;
+        t.complexity = { level: p.complexity, by: 'planner', reason: 'set by the plan', confident: true, seq: record.seq };
+        t.complexityHistory.push({ level: p.complexity, by: 'planner', reason: 'set by the plan', seq: record.seq });
+      }
       if (p.parentId) state.tasks.get(p.parentId)?.children.push(p.taskId);
       break;
     }
@@ -235,6 +260,20 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
       if (p.writeScope.length) task.writeScope = p.writeScope;
       if (p.role) task.role = p.role;
       if (p.size) task.size = p.size;
+      if (p.assumptions.length) task.assumptions = p.assumptions;
+      break;
+    }
+    case 'task.classified': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (!task) break;
+      const { level, by, reason, confident } = record.payload;
+      task.complexity = { level, by, reason, confident, seq: record.seq };
+      task.complexityHistory.push({ level, by, reason, seq: record.seq });
+      break;
+    }
+    case 'task.waiting': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.waiting = record.payload.reason;
       break;
     }
     case 'task.workspace_assigned': {
@@ -296,6 +335,10 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         agent: p.agent,
         node: p.node,
         mode: p.mode,
+        ...(p.tier && { tier: p.tier }),
+        ...(p.model && { requestedModel: p.model, model: p.model }),
+        ...(p.effort && { effort: p.effort }),
+        ...(p.why && { why: p.why }),
         dispatchedSeq: record.seq,
         startedTs: record.ts,
         state: 'running',
@@ -311,6 +354,7 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
       if (task) {
         task.runIds.push(p.runId);
         if (p.mode === 'start') task.attempts += 1;
+        delete task.waiting;
       }
       break;
     }
@@ -325,8 +369,8 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
           run.sessionRef = event.sessionRef;
           run.model = event.model;
           const task = state.tasks.get(run.taskId);
-          // Planner and reviewer sessions are separate from the author's session.
-          if (task && !['plan', 'review'].includes(run.mode)) task.sessionRef = event.sessionRef;
+          // Planner, reviewer and classifier sessions are separate from the author's session.
+          if (task && !['plan', 'review', 'classify'].includes(run.mode)) task.sessionRef = event.sessionRef;
           break;
         }
         case 'text.delta':
@@ -373,7 +417,13 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         options: p.options,
         status: 'open',
         askedTs: record.ts,
+        matches: [],
       });
+      break;
+    }
+    case 'question.matched': {
+      const p = record.payload;
+      state.questions.get(p.questionId)?.matches.push({ taskId: p.taskId, runId: p.runId, text: p.text, by: p.by, ts: record.ts });
       break;
     }
     case 'question.answered': {

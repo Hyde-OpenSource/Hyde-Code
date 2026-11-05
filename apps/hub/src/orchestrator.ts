@@ -2,8 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  ADAPTER_MAX_EFFORT,
   apply,
   canTransition,
+  clampEffort,
+  classifyByRules,
+  effortShift,
+  shiftEffort,
+  type Complexity,
   HELP_TEXT,
   nextId,
   replay,
@@ -19,6 +25,7 @@ import {
   type HarnessState,
   type Inbound,
   type OutboundMessage,
+  type QuestionView,
   type RunHandle,
   type RunMode,
   type RunSpec,
@@ -30,18 +37,20 @@ import { buildTaskPacket, HARNESS_ENV, hasProgressEntry, LESSON_FILES, readLesso
 import { MCP_MAIN } from '@hyde/mcp-harness';
 import { compileProfile, DEFAULT_DEV_PROFILE } from '@hyde/policy';
 import { branchName } from '@hyde/workspace';
-import { accountQuota, route, type AgentPool } from './agents.ts';
+import { accountQuota, jobFor, placeOn, route, tierTable, type AgentPool, type RoutedRun } from './agents.ts';
 import { browserCheck, type BrowserCheckInput, type BrowserCheckResult } from './browser.ts';
 import type { HubConfig, ProjectConfig } from './config.ts';
 import { worktreesRoot, type HostOps } from './host.ts';
 import type { Notifier } from './notifier.ts';
-import { checkPlan, PLAN_SCHEMA, plannerPrompt } from './planner.ts';
+import { checkPlan, CLASSIFY_SCHEMA, classifyPrompt, HARNESS_MODE_LINE, parseClassification, PLAN_SCHEMA, plannerPrompt } from './planner.ts';
 import { decide as decidePolicy, hookResponse } from './policy-engine.ts';
 import { blockingFindings, parseReview, REVIEW_SCHEMA, reviewFixPrompt, reviewPrompt } from './review.ts';
 import { readWorkflow, renderTemplate, type Workflow } from './workflow.ts';
 
 const HARNESS: Actor = { kind: 'harness', id: 'hub' };
 const CONTINUATION_MODES: RunMode[] = ['continue', 'answer', 'fix', 'review_fix', 'conflict', 'browser_fix'];
+/** Runs that read the repo and answer in JSON; they never edit or own the task's session. */
+const READ_ONLY_MODES: RunMode[] = ['plan', 'review', 'classify'];
 
 export interface OrchestratorDeps {
   config: HubConfig;
@@ -117,7 +126,7 @@ export class Orchestrator {
       const task = this.state.tasks.get(run.taskId);
       if (!task) continue;
       if (task.status === 'running') this.setStatus(task, 'ready', 'hub restarted during the run');
-      if (task.status === 'clarifying' && run.mode === 'plan') this.retryAt.set(task.id, 0);
+      if (task.status === 'clarifying' && (run.mode === 'plan' || run.mode === 'classify')) this.retryAt.set(task.id, 0);
       if (task.status === 'review' && run.mode === 'review') void this.verify(task.id, { fromReview: true });
     }
     for (const task of this.state.tasks.values()) {
@@ -210,7 +219,7 @@ export class Orchestrator {
       if (task.status !== 'clarifying' || this.busy.has(task.id) || this.runningFor(task.id)) continue;
       if ((this.retryAt.get(task.id) ?? 0) > this.now()) continue;
       if (this.live.size >= this.config.maxConcurrentRuns) return;
-      await this.dispatch(task, 'plan');
+      await this.dispatch(task, this.wantsPlan(task) ? 'plan' : 'classify');
     }
   }
 
@@ -288,11 +297,13 @@ export class Orchestrator {
 
     // Continuations stay with the agent that owns the session; everything else is routed.
     let agent: string;
+    let routedRun: RoutedRun;
     if (continuing && task.agent) {
       agent = task.agent;
       const profile = this.deps.pool.profile(agent);
       const quota = profile ? accountQuota(this.state, profile.account, this.now()) : undefined;
       if (!profile?.enabled || quota?.blocked) return false;
+      routedRun = this.sessionPlacement(task, mode, profile, quota?.max ?? 0);
     } else {
       const routed = route({
         task,
@@ -304,11 +315,19 @@ export class Orchestrator {
         now: this.now(),
         ...(extra.author && { author: extra.author }),
       });
-      if ('wait' in routed) return false;
+      if ('wait' in routed) {
+        await this.noteWaiting(task, mode, routed.wait);
+        return false;
+      }
       if ('none' in routed) {
         if (mode === 'plan') {
           // No planner available: plan-less flow.
           this.setStatus(task, 'ready', `no planner: ${routed.none}`);
+          return false;
+        }
+        if (mode === 'classify') {
+          this.classified(task, task.complexity?.level ?? 'medium', 'harness', `no agent could classify it (${routed.none}); kept the rules' guess`);
+          this.setStatus(task, 'ready', 'complexity kept from the rules');
           return false;
         }
         if (mode === 'review') return false;
@@ -319,10 +338,11 @@ export class Orchestrator {
         return false;
       }
       agent = routed.agent;
+      routedRun = routed;
     }
     const profile = this.deps.pool.profile(agent)!;
     const host = this.deps.host(profile.node);
-    const readOnly = mode === 'plan' || mode === 'review';
+    const readOnly = READ_ONLY_MODES.includes(mode);
 
     if (!readOnly && !task.worktree) {
       const branch = branchName(agent, 'feature', task.id, task.title);
@@ -355,13 +375,17 @@ export class Orchestrator {
       writeFileSync(
         packetFile,
         buildTaskPacket({
-          task,
+          // Subtasks follow their parent plan's assumptions.
+          task: task.assumptions.length || !task.parentId ? task : { ...task, assumptions: this.state.tasks.get(task.parentId)?.assumptions ?? [] },
           agent,
-          model: profile.model ?? 'default model',
+          model: routedRun.model ?? profile.model ?? 'default model',
+          ...(routedRun.tier && { tier: routedRun.tier }),
+          checks: project.checks,
           branch: task.branch!,
           baseBranch: task.baseBranch!,
           projectName: project.name ?? project.id,
-          answers: [...this.state.questions.values()].filter((q) => q.taskId === task.id && q.status === 'answered'),
+          answers: this.questionMemory(task).answers,
+          decisions: this.questionMemory(task).decisions,
           lessons: readLessons(project.path),
           canCommit: adapter.canCommit !== false,
           ...(workflow.template && {
@@ -394,11 +418,12 @@ export class Orchestrator {
       readOnly,
       ...(mode === 'plan' && { jsonSchema: PLAN_SCHEMA }),
       ...(mode === 'review' && { jsonSchema: REVIEW_SCHEMA }),
+      ...(mode === 'classify' && { jsonSchema: CLASSIFY_SCHEMA }),
       ...(!readOnly && { writableDirs: [await host.gitCommonDir(project.path)] }),
       ...(this.config.policy.enabled && !readOnly && { policyHook: { url: `${hubUrl}/api/policy/pre-tool-use`, token } }),
       env: { ...HARNESS_ENV, HYDE_AGENT_NAME: agent, HYDE_TASK_ID: task.id },
-      ...(profile.model && { model: profile.model }),
-      ...(profile.effort && { effort: profile.effort }),
+      ...(routedRun.model && { model: routedRun.model }),
+      ...(routedRun.effort && { effort: routedRun.effort }),
     };
 
     if (!readOnly && task.status !== 'running') this.setStatus(task, 'running', `${mode} turn on ${agent}`);
@@ -416,6 +441,10 @@ export class Orchestrator {
         agent,
         node: profile.node,
         mode,
+        tier: routedRun.tier,
+        ...(routedRun.model && { model: routedRun.model }),
+        ...(routedRun.effort && { effort: routedRun.effort }),
+        why: routedRun.why,
       },
     });
 
@@ -431,7 +460,7 @@ export class Orchestrator {
     }
     this.live.set(runId, { handle, adapter, token, stalled: false, denials: 0 });
     this.tokens.set(token, runId);
-    this.log(`${task.id}: dispatched ${runId} (${mode}) on ${agent}`);
+    this.log(`${task.id}: dispatched ${runId} (${mode}) on ${agent} · ${routedRun.tier} · ${routedRun.model ?? 'default model'}${routedRun.effort ? ` · effort ${routedRun.effort}` : ''}`);
     void this.consume(runId, task.id, handle, adapter, profile.account);
     return true;
   }
@@ -439,10 +468,24 @@ export class Orchestrator {
   /** Decides the next turn from the log, so it survives restarts. */
   private nextTurn(task: TaskView, forced?: RunMode): { mode: RunMode; prompt: string } {
     if (forced === 'plan') {
-      const answers = [...this.state.questions.values()]
-        .filter((q) => q.taskId === task.id && q.status === 'answered')
-        .map((q) => ({ q: q.text, a: q.answer! }));
-      return { mode: 'plan', prompt: plannerPrompt({ title: task.title, spec: task.spec, answers, client: task.kind === 'client' }) };
+      const memory = this.questionMemory(task);
+      return {
+        mode: 'plan',
+        prompt: plannerPrompt({
+          title: task.title,
+          spec: task.spec,
+          answers: memory.answers.map((q) => ({ q: q.text, a: q.answer! })),
+          open: memory.open.map((q) => q.text),
+          decisions: memory.decisions.map((q) => ({ q: q.text, a: q.answer!, taskId: q.taskId })),
+          client: task.kind === 'client',
+          maxQuestions: this.config.planner.maxQuestions,
+          ...(task.complexity && { guess: { level: task.complexity.level, reason: task.complexity.reason } }),
+        }),
+      };
+    }
+    if (forced === 'classify') {
+      const guess = task.complexity ?? { level: 'medium', reason: 'no rule matched' };
+      return { mode: 'classify', prompt: classifyPrompt({ title: task.title, spec: task.spec, guess }) };
     }
     const lastRun = task.runIds.length ? this.state.runs.get(task.runIds.at(-1)!) : undefined;
     const since = lastRun?.dispatchedSeq ?? 0;
@@ -529,6 +572,7 @@ export class Orchestrator {
     const task = this.state.tasks.get(run.taskId)!;
     if (run.mode === 'plan') return this.afterPlan(task, runId, live);
     if (run.mode === 'review') return this.afterReview(task, runId);
+    if (run.mode === 'classify') return this.afterClassify(task, runId);
     if (task.status !== 'running') return; // cancelled or moved on while running
 
     const openBlocking = [...this.state.questions.values()].find((q) => q.runId === runId && q.blocking && q.status === 'open');
@@ -591,6 +635,93 @@ export class Orchestrator {
     this.setStatus(task, 'ready', 'turn ended without complete_task');
   }
 
+  // ---------------------------------------------------------------- complexity
+
+  /** A task goes through the planner when one is configured (trivial tasks skip it) or it came by voice. */
+  private wantsPlan(task: TaskView): boolean {
+    if (task.source.kind === 'hyde-ai' && this.canPlan(task)) return true;
+    if (!this.config.planner.enabled) return false;
+    return !(task.complexity?.level === 'trivial' && task.complexity.confident);
+  }
+
+  /** Rules couldn't tell and no planner will: a cheap model decides. */
+  private wantsClassifier(task: TaskView): boolean {
+    return this.config.routing.classifier && task.complexity?.confident === false && !this.wantsPlan(task);
+  }
+
+  private classified(task: TaskView, level: Complexity, by: 'rules' | 'model' | 'planner' | 'client' | 'owner' | 'harness', reason: string, confident = true): void {
+    const c = task.complexity;
+    if (c && c.level === level && c.by === by && c.reason === reason && c.confident === confident) return;
+    this.append({ type: 'task.classified', taskId: task.id, payload: { taskId: task.id, level, by, reason, confident } });
+  }
+
+  /** First pass at creation: deterministic rules, with a client's hint settling what they can't. */
+  private classifyNew(task: TaskView): void {
+    const rules = classifyByRules(task.spec, task.size ? { size: task.size } : {});
+    if (task.complexity) return; // a planned subtask already has its level
+    if (!rules.confident && task.complexityHint) {
+      this.classified(task, task.complexityHint, 'client', `suggested by ${task.source.kind}; the rules were unsure (${rules.reason})`);
+      return;
+    }
+    this.classified(task, rules.level, 'rules', rules.reason, rules.confident);
+  }
+
+  private afterClassify(task: TaskView, runId: string): void {
+    if (task.status !== 'clarifying') return;
+    const run = this.state.runs.get(runId)!;
+    const result = parseClassification(run.structured);
+    const owner = task.complexity?.by === 'owner';
+    if (result && !owner) this.classified(task, result.level, 'model', `${run.agent}: ${result.reason || 'no reason given'}`);
+    else if (!owner) this.classified(task, task.complexity?.level ?? 'medium', 'harness', `classifier ${runId} gave no usable answer; kept the rules' guess`);
+    this.setStatus(task, 'ready', `complexity ${this.state.tasks.get(task.id)!.complexity!.level}`);
+  }
+
+  /**
+   * Model and effort for a run that continues an agent's own session. When the agent has no tier
+   * for the task's level any more (the owner raised it), it keeps its strongest tier and says so.
+   */
+  private sessionPlacement(task: TaskView, mode: RunMode, profile: HubConfig['agents'][number], quotaMax: number): RoutedRun {
+    const { job, level } = jobFor(task, mode);
+    const place = placeOn(profile, this.deps.pool.vendor(profile.name), job, level, this.config.routing);
+    const shift = effortShift(this.config.routing.effort, quotaMax);
+    if (!('no' in place)) {
+      const effort = shiftEffort(place.effort, shift, ADAPTER_MAX_EFFORT[profile.adapter] ?? 'high');
+      return { agent: profile.name, tier: place.tier, free: place.free, why: `${mode} in ${profile.name}'s session (${level} tier)`, ...(place.model && { model: place.model }), ...(effort && { effort }) };
+    }
+    const table = tierTable(profile);
+    const top = (['high', 'medium', 'low', 'trivial'] as const).find((l) => table[l])!;
+    const spec = table[top]!;
+    const model = spec.model ?? profile.model;
+    const effort = clampEffort(shiftEffort(spec.effort ?? profile.effort, shift), profile.adapter);
+    return { agent: profile.name, tier: top, free: false, why: `${mode} kept on ${profile.name}, which owns the session (${place.no})`, ...(model && { model }), ...(effort && { effort }) };
+  }
+
+  /** Records why a task can't start yet; tells the owner once per wait when it is about quota. */
+  private async noteWaiting(task: TaskView, mode: RunMode, reason: string): Promise<void> {
+    if (/ is busy$|all agents are busy/.test(reason)) return; // ordinary queueing
+    if (task.waiting === reason) return;
+    const first = task.waiting === undefined;
+    this.append({ type: 'task.waiting', taskId: task.id, payload: { taskId: task.id, reason } });
+    if (!first) return;
+    const { job, level } = jobFor(task, mode);
+    await this.notifyTask(task, {
+      text: `⏳ ${task.id} waits: ${reason}. Its ${job === 'code' ? `${level} work` : `${job} step`} needs that tier, so it is not moved to a weaker model. /level ${task.id} <level> changes the tier.`,
+      priority: 'digest',
+    });
+  }
+
+  /** Answered and open questions of a task, plus answered questions of the project's other tasks. */
+  private questionMemory(task: TaskView): { answers: QuestionView[]; open: QuestionView[]; decisions: QuestionView[] } {
+    const all = [...this.state.questions.values()];
+    const answers = all.filter((q) => q.taskId === task.id && q.status === 'answered');
+    const open = all.filter((q) => q.taskId === task.id && q.status === 'open');
+    const decisions = all
+      .filter((q) => q.status === 'answered' && q.taskId !== task.id && this.state.tasks.get(q.taskId)?.projectId === task.projectId)
+      .filter((q) => !answers.some((a) => a.text === q.text))
+      .slice(-10);
+    return { answers, open, decisions };
+  }
+
   // ---------------------------------------------------------------- planning
 
   private async afterPlan(task: TaskView, runId: string, live: LiveRun | undefined): Promise<void> {
@@ -621,10 +752,23 @@ export class Orchestrator {
       return;
     }
     const { plan } = check;
+    if (plan.complexity && task.complexity?.by !== 'owner') {
+      this.classified(task, plan.complexity, 'planner', plan.complexityReason || `planned by ${run.agent}`);
+    }
 
-    // Questions first (devflow rule 4: never assume).
+    // Only blocking questions are asked, up to the cap; everything else becomes a stated assumption.
+    const max = this.config.planner.maxQuestions;
+    const blocking = plan.questions.filter((q) => q.blocking);
+    const assumptions = [
+      ...plan.assumptions,
+      ...plan.questions.filter((q) => !q.blocking).map((q) => `Left to the agent (not blocking): ${q.text}`),
+      ...blocking.slice(max).map((q) => `Over the question limit, decide sensibly: ${q.text}`),
+    ];
+    const questions = blocking.slice(0, max);
+
+    // Questions first (devflow rule 4: never assume, but ask only what blocks the work).
     let firstBlocking: string | undefined;
-    for (const q of plan.questions) {
+    for (const q of questions) {
       const questionId = nextId(this.state, 'Q');
       this.append({
         type: 'question.asked',
@@ -650,10 +794,13 @@ export class Orchestrator {
           taskId: task.id,
           runId,
           children: [],
+          assumptions,
           ...(only && { doneWhen: only.doneWhen, writeScope: only.writeScope, role: only.role, size: only.size }),
         },
       });
+      if (only?.complexity && !plan.complexity && task.complexity?.by !== 'owner') this.classified(task, only.complexity, 'planner', `planned by ${run.agent}`);
       this.setStatus(task, 'ready', 'planned as one task');
+      if (assumptions.length) await this.notifyAssumptions(task, assumptions);
       return;
     }
 
@@ -679,12 +826,18 @@ export class Orchestrator {
           role: t.role,
           dependsOn: t.dependsOn.map((k) => ids.get(k)!),
           size: t.size,
+          ...(t.complexity && { complexity: t.complexity }),
           ...(task.pinnedAgent && { agent: task.pinnedAgent }),
         },
       });
     }
-    this.append({ type: 'task.planned', taskId: task.id, payload: { taskId: task.id, runId, children: [...ids.values()] } });
-    const summary = plan.tasks.map((t) => `${ids.get(t.key)} [${t.size}] ${t.title}${t.dependsOn.length ? ` (after ${t.dependsOn.map((k) => ids.get(k)).join(', ')})` : ''}`).join('\n');
+    this.append({ type: 'task.planned', taskId: task.id, payload: { taskId: task.id, runId, children: [...ids.values()], assumptions } });
+    for (const id of ids.values()) {
+      const child = this.state.tasks.get(id)!;
+      if (!child.complexity) this.classifyNew(child);
+    }
+    if (assumptions.length) await this.notifyAssumptions(task, assumptions);
+    const summary = plan.tasks.map((t) => `${ids.get(t.key)} [${t.size}${t.complexity ? `, ${t.complexity}` : ''}] ${t.title}${t.dependsOn.length ? ` (after ${t.dependsOn.map((k) => ids.get(k)).join(', ')})` : ''}`).join('\n');
     if (plan.tasks.length > this.config.planner.approvalOver || plan.tasks.some((t) => t.size === 'L')) {
       const approvalId = this.requestApproval(task, 'plan', `Plan for ${task.id}: ${plan.tasks.length} subtasks`);
       this.setStatus(task, 'blocked', `waiting for ${approvalId}`, { kind: 'approval', id: approvalId });
@@ -773,7 +926,15 @@ export class Orchestrator {
             this.busy.delete(taskId);
             const started = await this.dispatch(task, 'review', {
               author: task.agent!,
-              prompt: reviewPrompt({ title: task.title, spec: task.spec, ...(task.doneWhen && { doneWhen: task.doneWhen }), diff, client: task.kind === 'client' }),
+              prompt: reviewPrompt({
+                title: task.title,
+                spec: task.spec,
+                ...(task.doneWhen && { doneWhen: task.doneWhen }),
+                diff,
+                client: task.kind === 'client',
+                answers: [...this.questionMemory(task).answers, ...this.questionMemory(task).decisions].map((q) => ({ q: q.text, a: q.answer! })),
+                assumptions: task.assumptions,
+              }),
             });
             if (started) return;
             this.busy.add(taskId);
@@ -1068,6 +1229,22 @@ export class Orchestrator {
         void this.tick();
         return `${task.id} will run again.`;
       }
+      case 'level': {
+        const task = this.state.tasks.get(command.taskId);
+        if (!task) return `No task ${command.taskId}.`;
+        if (TERMINAL_STATUSES.includes(task.status)) return `${task.id} is ${task.status}.`;
+        const before = task.complexity?.level;
+        this.deps.store.append({
+          type: 'task.classified',
+          actor,
+          taskId: task.id,
+          commandId: inbound.commandId,
+          payload: { taskId: task.id, level: command.level, by: 'owner', reason: `set by ${inbound.userId}${before ? ` (was ${before})` : ''}`, confident: true },
+        });
+        if (task.status === 'clarifying' && !this.wantsPlan(task) && !this.runningFor(task.id)) this.setStatus(task, 'ready', `complexity set to ${command.level} by the owner`);
+        void this.tick();
+        return `${task.id} is now ${command.level}${before && before !== command.level ? ` (was ${before})` : ''}. Its next run uses the ${command.level} tier.`;
+      }
       case 'answer':
         return this.answer(command.questionId, command.text, inbound, actor);
       case 'decide':
@@ -1099,7 +1276,7 @@ export class Orchestrator {
    */
   submitTask(inbound: Inbound & { command: { kind: 'new' } }): TaskSubmission {
     const { command } = inbound;
-    return this.createTask(inbound, 'task', command.text, command.project, command.agent);
+    return this.createTask(inbound, 'task', command.text, command.project, command.agent, command.complexity);
   }
 
   /**
@@ -1116,7 +1293,7 @@ export class Orchestrator {
     return loose.length === 1 ? { project: loose[0]! } : loose.length > 1 ? { ambiguous: loose } : {};
   }
 
-  private createTask(inbound: Inbound, kind: 'task' | 'client', text: string, projectTag?: string, agent?: string): TaskSubmission {
+  private createTask(inbound: Inbound, kind: 'task' | 'client', text: string, projectTag?: string, agent?: string, complexityHint?: Complexity): TaskSubmission {
     const projects = this.config.projects;
     const found = projectTag ? this.findProject(projectTag) : projects.length === 1 ? { project: projects[0]! } : {};
     const project = found.project;
@@ -1147,10 +1324,12 @@ export class Orchestrator {
         kind,
         source: { kind: sourceKind(inbound.gateway), ...(inbound.chatId && { chatId: inbound.chatId }) },
         ...(agent && { agent }),
+        ...(complexityHint && { complexityHint }),
       },
     });
     if (!created) return { error: 'duplicate', text: 'Already received.' };
     const task = this.state.tasks.get(taskId)!;
+    this.classifyNew(task);
     const done = (text: string): TaskSubmission => ({ taskId, status: this.state.tasks.get(taskId)!.status, text });
     if (kind === 'client') {
       const approvalId = this.requestApproval(task, 'client-intake', `Work on this client message for #${project.id}?`);
@@ -1171,14 +1350,19 @@ export class Orchestrator {
         : task.source.kind === 'hyde-ai'
           ? 'Starting when a slot is free (no agent with the plan role to clarify it first).'
           : 'Starting when a slot is free.';
-    return done(`${taskId} accepted for #${project.id}: ${task.title}\n${next}`);
+    const level = this.state.tasks.get(taskId)!.complexity;
+    const levelText = level ? `\nComplexity: ${level.level}${level.confident ? '' : ' (a guess; checking)'}: ${level.reason}.` : '';
+    return done(`${taskId} accepted for #${project.id}: ${task.title}\n${next}${levelText}`);
   }
 
   /** Sends a new task to the planner, or straight to ready. Returns true when it plans first. */
   private startTask(task: TaskView): boolean {
     // Spoken requests are easy to mishear, so Hyde AI tasks are always clarified when some agent can plan.
-    const plan = this.config.planner.enabled || (task.source.kind === 'hyde-ai' && this.canPlan(task));
+    task = this.state.tasks.get(task.id)!;
+    const plan = this.wantsPlan(task);
     if (plan) this.setStatus(task, 'clarifying', this.config.planner.enabled ? 'planning' : 'planning (voice request: clarify first)');
+    else if (this.wantsClassifier(task)) this.setStatus(task, 'clarifying', 'checking complexity with a cheap model');
+    else if (this.config.planner.enabled) this.setStatus(task, 'ready', 'trivial: no planning needed');
     else this.setStatus(task, 'ready', 'no planner configured');
     return plan;
   }
@@ -1260,9 +1444,9 @@ export class Orchestrator {
           this.setStatus(task, 'cancelled', 'client message ignored');
           return `${task.id} ignored.`;
         }
-        this.setStatus(task, this.config.planner.enabled ? 'clarifying' : 'ready', 'client message accepted');
+        this.setStatus(task, this.wantsPlan(task) || this.wantsClassifier(task) ? 'clarifying' : 'ready', 'client message accepted');
         void this.tick();
-        return `${task.id} accepted. ${this.config.planner.enabled ? 'Planning first.' : 'Starting when a slot is free.'}`;
+        return `${task.id} accepted. ${this.wantsPlan(task) ? 'Planning first.' : 'Starting when a slot is free.'}`;
       case 'promote':
         if (!approved) return `${a.id} denied; nothing was released.`;
         void this.finishPromote(a.data ?? {}, task);
@@ -1363,7 +1547,13 @@ export class Orchestrator {
       const running = [...this.state.runs.values()].filter((r) => r.agent === p.name && r.state === 'running');
       const q = accountQuota(this.state, p.account, this.now());
       const state = !p.enabled ? 'disabled' : h && (!h.installed || !h.signedIn) ? `unavailable: ${h.problem ?? 'not signed in'}` : running.length ? `working on ${running.map((r) => r.taskId).join(', ')}` : 'idle';
-      lines.push(`${p.name} · ${p.adapter} (${this.deps.pool.vendor(p.name)})${p.model ? ` · ${p.model}` : ''} · ${state} · quota ${Math.round(q.max * 100)}%`);
+      const table = tierTable(p);
+      const tiers = (['high', 'medium', 'low', 'trivial'] as const)
+        .filter((l) => table[l])
+        .map((l) => `${l} ${table[l]!.model ?? p.model ?? 'default'}${table[l]!.effort ? `/${table[l]!.effort}` : ''}`)
+        .join(', ');
+      const note = !p.tiers && p.model && table.high?.model && table.high.model !== p.model ? ` (built-in tiers; "model": "${p.model}" is not used, add "tiers" to change)` : '';
+      lines.push(`${p.name} · ${p.adapter} (${this.deps.pool.vendor(p.name)}) · tiers: ${tiers}${note} · ${state} · quota ${Math.round(q.max * 100)}%`);
     }
     return lines.join('\n');
   }
@@ -1400,7 +1590,7 @@ export class Orchestrator {
     const run = this.state.runs.get(runId)!;
     const task = this.state.tasks.get(run.taskId)!;
     const actor: Actor = { kind: 'agent', id: run.agent };
-    const readOnly = run.mode === 'plan' || run.mode === 'review';
+    const readOnly = READ_ONLY_MODES.includes(run.mode);
     switch (tool) {
       case 'ask_question': {
         const questionId = nextId(this.state, 'Q');
@@ -1564,6 +1754,12 @@ export class Orchestrator {
     });
   }
 
+  private async notifyAssumptions(task: TaskView, assumptions: string[]): Promise<void> {
+    await this.notifyTask(task, {
+      text: `📝 ${task.id} planned without asking about these. If one is wrong, /stop ${task.id} and send the task again with the right detail:\n${assumptions.map((a) => `- ${a}`).join('\n')}`,
+    });
+  }
+
   private async notifyApproval(task: TaskView, approvalId: string, text: string): Promise<void> {
     await this.notifyTask(task, {
       text: `🔐 ${approvalId} on ${task.id}: ${text}`,
@@ -1605,7 +1801,7 @@ export class Orchestrator {
   private lastModel(task: TaskView): string | undefined {
     for (const id of [...task.runIds].reverse()) {
       const run = this.state.runs.get(id);
-      if (run?.model && run.mode !== 'review' && run.mode !== 'plan') return run.model;
+      if (run?.model && !READ_ONLY_MODES.includes(run.mode)) return run.model;
     }
     return undefined;
   }

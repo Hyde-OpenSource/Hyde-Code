@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { promisify } from 'node:util';
+import { BUILTIN_TIERS, HYDE_EFFORTS, ROUTING_MODES, type HydeEffort, type RoutingMode } from '@hyde/core';
 import type { RawConfig } from './config.ts';
 import { detectAll, type Detected } from './detect.ts';
 
@@ -22,7 +23,17 @@ export interface SetupAnswers {
   gateways: { telegram: boolean; slack: boolean; discord: boolean; whatsapp: boolean };
   quietHours?: { start: string; end: string };
   ownerChat?: string;
+  /** Mode and hub-wide effort (defaults: balanced, balanced). */
+  routing?: { mode: RoutingMode; effort: HydeEffort };
 }
+
+/** One line per mode for the setup prompt and the docs. */
+export const MODE_HELP: Record<RoutingMode, string> = {
+  balanced: 'a strong model plans and reviews; code goes to the tier its complexity needs (default)',
+  'claude-only': 'Claude models only, by complexity (opus / sonnet / haiku)',
+  'free-first': 'free models for trivial and low work, Claude for everything else',
+  'assistant-plans': 'the Hyde AI desktop assistant plans its own requests; the CLIs code',
+};
 
 /** Pure: detected tools + answers → raw config (merged into any existing config). */
 export function buildConfig(detected: Detected[], answers: SetupAnswers, existing?: RawConfig): RawConfig {
@@ -51,7 +62,8 @@ export function buildConfig(detected: Detected[], answers: SetupAnswers, existin
     ...existing,
     agents,
     maxConcurrentRuns: Math.max(1, Math.min(agents.length, 3)),
-    planner: { enabled: answers.planner, approvalOver: 3 },
+    planner: { enabled: answers.planner, approvalOver: 3, maxQuestions: 3 },
+    routing: { ...existing?.routing, mode: answers.routing?.mode ?? existing?.routing?.mode ?? 'balanced', effort: answers.routing?.effort ?? existing?.routing?.effort ?? 'balanced' },
     review: { enabled: answers.review, rounds: 2, crossVendor: true },
     browser: { enabled: answers.browser, video: false },
     policy: { enabled: answers.policy, approvalRequired: ['new-dependency'], circuitBreaker: 5 },
@@ -111,6 +123,14 @@ export async function runSetup(configFile: string, envFile: string, opts: { proj
       continue;
     }
     if (await yes(` Use ${d.label}?`, ['claude-code', 'codex'].includes(d.id))) {
+      const builtin = d.suggest && BUILTIN_TIERS[d.suggest.adapter];
+      if (builtin) {
+        // Claude gets a model per complexity tier; change them later under "tiers" in Settings.
+        const t = (['high', 'medium', 'low', 'trivial'] as const).map((l) => `${l} ${builtin[l]?.model}/${builtin[l]?.effort}`).join(', ');
+        console.log(`   Models by complexity: ${t}`);
+        agents.push({ id: d.id });
+        continue;
+      }
       const model = await ask(`   Model for ${d.label} (empty = CLI default)`, d.suggest?.model ?? '');
       agents.push({ id: d.id, ...(model && { model }) });
     }
@@ -139,6 +159,13 @@ export async function runSetup(configFile: string, envFile: string, opts: { proj
   const review = vendors.size > 1 ? await yes(' Cross-vendor review of every diff?', true) : (console.log(' Cross-vendor review: needs agents from two vendors; skipped.'), false);
   const browser = playwright && guess.preview ? await yes(` Verify UI changes in a browser (${guess.preview})?`, true) : false;
   const policy = await yes(' Policy checks on agent tool calls (protected branches, write scope, approvals)?', true);
+
+  console.log('\nModels by complexity (every task is rated trivial, low, medium or high first):');
+  for (const m of ROUTING_MODES) console.log(`   ${m}: ${MODE_HELP[m]}`);
+  const pick = <T extends string>(value: string, allowed: readonly T[], def: T): T => ((allowed as readonly string[]).includes(value) ? (value as T) : def);
+  const mode = pick(await ask(' Mode', existing?.routing?.mode ?? 'balanced'), ROUTING_MODES, 'balanced');
+  console.log('   Hyde effort: saver (less thinking, saves quota), balanced, max (more thinking), auto (saver when quota runs low)');
+  const effort = pick(await ask(' Hyde effort', existing?.routing?.effort ?? 'balanced'), HYDE_EFFORTS, 'balanced');
 
   console.log('\nChat (tokens go into .env, never into the config):');
   const env: Record<string, string> = {};
@@ -180,6 +207,7 @@ export async function runSetup(configFile: string, envFile: string, opts: { proj
       browser,
       policy,
       gateways,
+      routing: { mode, effort },
       ...(qs && qe && { quietHours: { start: qs.trim(), end: qe.trim() } }),
     },
     existing,

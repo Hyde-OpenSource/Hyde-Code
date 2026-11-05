@@ -16,7 +16,13 @@ export interface PacketInput {
   baseBranch: string;
   projectName: string;
   answers: QuestionView[];
+  /** Answered questions from the project's other tasks: standing decisions. */
+  decisions?: QuestionView[];
   lessons: string[];
+  /** Complexity tier this run is on; trivial and low runs get short, step-by-step instructions. */
+  tier?: 'trivial' | 'low' | 'medium' | 'high';
+  /** Commands the harness runs after complete_task. */
+  checks?: string[];
   /** False when the agent's sandbox can't write .git; the harness commits for it. */
   canCommit?: boolean;
   /** Rendered WORKFLOW.md body from the repo, if any. */
@@ -30,6 +36,7 @@ export function buildTaskPacket(input: PacketInput): string {
     '# Hyde Code task packet',
     '',
     `You are **${input.agent}** (${input.model}), a child agent started by the Hyde Code harness.`,
+    'Harness mode (DEVFLOW_HARNESS=1): you are a child session. Never ask whether this is a main or child session; skip the devflow session question and ask the owner only through `ask_question`.',
     `Project: ${input.projectName}. Task: **${task.id}: ${task.title}**.`,
     `Branch: \`${input.branch}\` (cut from \`${input.baseBranch}\`). You are already on it, in your own git worktree.`,
     '',
@@ -41,6 +48,18 @@ export function buildTaskPacket(input: PacketInput): string {
     '',
     ...(task.doneWhen ? [`**Done when:** ${task.doneWhen}`, ''] : []),
     ...(task.writeScope.length ? [`**Write scope:** only change files matching ${task.writeScope.map((g) => `\`${g}\``).join(', ')}. Ask before touching anything else.`, ''] : []),
+    ...(input.checks?.length ? [`**Checks the harness runs after you call complete_task:** ${input.checks.map((c) => `\`${c}\``).join(', ')}. Run them yourself first.`, ''] : []),
+    ...(task.assumptions?.length ? ['**Planner assumptions (follow them unless the owner changed them):**', ...task.assumptions.map((a) => `- ${a}`), ''] : []),
+    ...(input.tier === 'trivial' || input.tier === 'low'
+      ? [
+          '## Steps (small task: keep it small)',
+          '1. Open only the files the task names (or the one obvious file). Do not explore or refactor anything else.',
+          '2. Make exactly the change asked for.',
+          `3. ${input.checks?.length ? 'Run the checks above' : 'Check the result (open the file or run the code)'}${input.canCommit === false ? '.' : ', then commit.'}`,
+          '4. Call `complete_task`. If anything is unclear, call `ask_question` instead of guessing, then end your turn.',
+          '',
+        ]
+      : []),
     '## Rules (devflow, enforced by the harness)',
     '- Work only in this worktree and on this branch. Never push, merge, rebase or switch branches; the harness pushes after the owner approves.',
     '- Never assume. If something is unclear, call the `ask_question` tool. Blocking question: call it, then end your turn; you will be resumed with the answer.',
@@ -56,8 +75,12 @@ export function buildTaskPacket(input: PacketInput): string {
   ];
   if (input.workflow) lines.push('', '## Project workflow (WORKFLOW.md)', input.workflow);
   if (input.answers.length) {
-    lines.push('', '## Earlier answers from the owner');
+    lines.push('', '## Earlier answers from the owner (never ask these again)');
     for (const q of input.answers) lines.push(`- ${q.id}: ${q.text} → **${q.answer}**`);
+  }
+  if (input.decisions?.length) {
+    lines.push('', '## Standing decisions in this project (apply them; do not ask again)');
+    for (const q of input.decisions) lines.push(`- ${q.id} (${q.taskId}): ${q.text} → **${q.answer}**`);
   }
   if (input.lessons.length) {
     lines.push('', '## Recent lessons');

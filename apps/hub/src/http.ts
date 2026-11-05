@@ -4,12 +4,12 @@ import { homedir } from 'node:os';
 import { extname, isAbsolute, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { describeEvent, normalizeCommandText, parseCommand, snapshot, TOOLS_NAMES, type Command, type EventStore } from '@hyde/core';
+import { COMPLEXITY_LEVELS, describeEvent, normalizeCommandText, parseCommand, snapshot, TOOLS_NAMES, type Command, type EventStore } from '@hyde/core';
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
-import type { AgentPool } from './agents.ts';
+import { tierTable, type AgentPool } from './agents.ts';
 import { readRawConfig, writeRawConfig, type HubConfig } from './config.ts';
 import type { Detected } from './detect.ts';
 import type { HostOps } from './host.ts';
@@ -50,7 +50,10 @@ const taskBody = z.object({
   source: z.enum(['api', 'cli', 'hyde-ai']).optional(),
   /** Makes retries safe: a second request with the same id creates nothing (409). */
   requestId: z.string().trim().min(1).max(100).optional(),
+  /** The client's guess at the complexity; the hub's rules decide (it only settles what they can't). */
+  complexity: z.enum(COMPLEXITY_LEVELS).optional(),
 });
+const levelBody = z.object({ level: z.enum(COMPLEXITY_LEVELS) });
 const answerBody = z.union([z.object({ text: z.string().trim().min(1).max(10_000) }), z.object({ option: z.number().int().min(0).max(9) })]);
 const decisionBody = z.object({ decision: z.enum(['approve', 'deny']) });
 
@@ -173,11 +176,11 @@ export function createApi(deps: ApiDeps): Hono {
   app.post('/api/tasks', ownerOrClient, async (c) => {
     const parsed = taskBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: 'send {"text": "...", "project"?: "...", "agent"?: "...", "requestId"?: "..."}', code: 'invalid' }, 400);
-    const { project, text, agent, source, requestId } = parsed.data;
+    const { project, text, agent, source, requestId, complexity } = parsed.data;
     const who = caller(c);
     const gateway = who.client ?? source ?? 'api';
     const result = orchestrator.submitTask({
-      command: { kind: 'new', text, ...(project && { project }), ...(agent && { agent }) },
+      command: { kind: 'new', text, ...(project && { project }), ...(agent && { agent }), ...(complexity && { complexity }) },
       userId: who.userId,
       gateway,
       chatId: '',
@@ -185,7 +188,16 @@ export function createApi(deps: ApiDeps): Hono {
     });
     if (result.error) return c.json({ error: result.text, code: result.error }, result.error === 'duplicate' ? 409 : 400);
     const task = orchestrator.state.tasks.get(result.taskId!)!;
-    return c.json({ id: task.id, status: task.status, projectId: task.projectId, title: task.title, text: result.text }, 201);
+    return c.json({ id: task.id, status: task.status, projectId: task.projectId, title: task.title, complexity: task.complexity ?? null, text: result.text }, 201);
+  });
+
+  app.post('/api/tasks/:id/level', ownerOrClient, async (c) => {
+    const id = (c.req.param('id') ?? '').toUpperCase();
+    if (!orchestrator.state.tasks.has(id)) return c.json({ error: `No task ${id}.`, code: 'not_found' }, 404);
+    const parsed = levelBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: 'send {"level": "trivial" | "low" | "medium" | "high"}', code: 'invalid' }, 400);
+    const reply = await run(c, { kind: 'level', taskId: id, level: parsed.data.level });
+    return c.json({ id, complexity: orchestrator.state.tasks.get(id)!.complexity ?? null, text: reply });
   });
 
   app.post('/api/questions/:id/answer', ownerOrClient, async (c) => {
@@ -224,10 +236,11 @@ export function createApi(deps: ApiDeps): Hono {
   app.get('/api/state', ownerOrClient, (c) =>
     c.json({
       ...snapshot(orchestrator.state),
-      agents: config.agents.map((a) => ({ ...a, vendor: deps.pool.vendor(a.name), health: deps.pool.health.get(a.name) ?? null })),
+      agents: config.agents.map((a) => ({ ...a, vendor: deps.pool.vendor(a.name), health: deps.pool.health.get(a.name) ?? null, tierTable: tierTable(a) })),
       projects: config.projects.map((p) => ({ id: p.id, name: p.name ?? p.id, path: p.path, baseBranch: p.baseBranch, releaseBranch: p.releaseBranch, checks: p.checks, preview: Boolean(p.preview) })),
       metrics: agentMetrics(orchestrator.state),
       stages: { planner: config.planner.enabled, review: config.review.enabled, browser: config.browser.enabled, policy: config.policy.enabled },
+      routing: config.routing,
     }),
   );
 

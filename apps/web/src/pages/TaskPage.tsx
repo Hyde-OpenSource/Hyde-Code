@@ -22,7 +22,13 @@ function describe(e: EventRow): string {
     case 'task.status_changed':
       return `→ ${p.to}${p.reason ? `: ${p.reason}` : ''}`;
     case 'run.dispatched':
-      return `${p.runId} dispatched to ${p.agent} (${p.mode})`;
+      return `${p.runId} dispatched to ${p.agent} (${p.mode}${p.tier ? `, ${p.tier} tier` : ''}${p.model ? `, ${p.model}` : ''}${p.effort ? `, effort ${p.effort}` : ''})${p.why ? `: ${p.why}` : ''}`;
+    case 'task.classified':
+      return `complexity ${p.level} (${p.by}${p.confident === false ? ', a guess' : ''}): ${p.reason}`;
+    case 'task.waiting':
+      return `waiting: ${p.reason}`;
+    case 'question.matched':
+      return `${p.by} asked again (${p.status === 'answered' ? 'answered from memory' : 'linked'}) as ${p.questionId}: ${p.text}`;
     case 'question.asked':
       return `${p.questionId} asked: ${p.text}`;
     case 'question.answered':
@@ -42,6 +48,49 @@ function describe(e: EventRow): string {
     default:
       return e.type;
   }
+}
+
+const LEVELS = ['trivial', 'low', 'medium', 'high'] as const;
+const BY: Record<string, string> = { rules: 'the hub rules', model: 'a cheap model', planner: 'the planner', client: 'the client', owner: 'you', harness: 'the hub' };
+
+/** The task's complexity level, who set it, and buttons to change it. */
+function Complexity({ task, refresh, notify }: { task: PageProps['state']['tasks'][number] } & Pick<PageProps, 'refresh' | 'notify'>) {
+  const c = task.complexity;
+  const open = !['done', 'cancelled', 'failed'].includes(task.status);
+  return (
+    <div className="card stack complexity">
+      <div className="spread">
+        <strong>Complexity</strong>
+        {c && <span className={`badge level-${c.level}`}>{c.level}</span>}
+      </div>
+      {c ? (
+        <div className="meta">
+          Set by {BY[c.by] ?? c.by}
+          {c.confident ? '' : ' (a guess, being checked)'}: {c.reason}
+        </div>
+      ) : (
+        <div className="meta">Not rated yet.</div>
+      )}
+      {task.waiting && <div className="meta">⏳ Waiting: {task.waiting}</div>}
+      {open && (
+        <div className="row wrap" role="group" aria-label="Change complexity">
+          {LEVELS.filter((l) => l !== c?.level).map((l) => (
+            <CommandButton key={l} command={{ kind: 'level', taskId: task.id, level: l }} label={l} refresh={refresh} notify={notify} />
+          ))}
+        </div>
+      )}
+      {task.assumptions.length > 0 && (
+        <div>
+          <strong>Planner assumptions</strong>
+          {task.assumptions.map((a) => (
+            <div key={a} className="meta">
+              · {a}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Diff({ text }: { text: string }) {
@@ -110,6 +159,8 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
           {open && task.status !== 'awaiting_merge' && <CommandButton command={{ kind: 'stop', target: task.id }} label="Stop" kind="danger" refresh={refresh} notify={notify} />}
         </div>
       </div>
+
+      <Complexity task={task} refresh={refresh} notify={notify} />
 
       <div className="grid">
         <div className="card stack">
@@ -219,6 +270,7 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
                 <th>Run</th>
                 <th>Agent</th>
                 <th>Mode</th>
+                <th>Tier</th>
                 <th>State</th>
                 <th>Tokens</th>
                 <th>Started</th>
@@ -233,6 +285,10 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
                     <div className="meta">{r.model}</div>
                   </td>
                   <td>{r.mode}</td>
+                  <td>
+                    {r.tier ?? '–'}
+                    {r.effort && <div className="meta">effort {r.effort}</div>}
+                  </td>
                   <td>{r.state === 'running' ? <span className="badge accent">running</span> : r.failure ? <span className="badge bad">{r.failure.reason}</span> : <span className="badge ok">done</span>}</td>
                   <td className="meta">
                     {r.inputTokens.toLocaleString()} / {r.outputTokens.toLocaleString()}

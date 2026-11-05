@@ -1,7 +1,28 @@
 {
   "dataDir": ".hyde",
   "port": 7420,
-  "agent": { "name": "claude-1" },
+  "agents": [
+    {
+      "name": "claude-1",
+      "adapter": "claude-code",
+      "roles": ["plan", "implement", "review", "ui"],
+      "tiers": {
+        "high": { "model": "opus", "effort": "high" },
+        "medium": { "model": "sonnet", "effort": "medium" },
+        "low": { "model": "haiku", "effort": "low" },
+        "trivial": { "model": "haiku", "effort": "low" }
+      }
+    },
+    {
+      "name": "opencode-1",
+      "adapter": "opencode",
+      "enabled": false,
+      "model": "opencode/big-pickle",
+      "roles": ["implement", "bulk", "triage"]
+    }
+  ],
+  "routing": { "mode": "balanced", "effort": "balanced", "classifier": true },
+  "planner": { "enabled": true, "approvalOver": 3, "maxQuestions": 3 },
   "maxConcurrentRuns": 1,
   "quotaSoftCeiling": 0.8,
   "projects": [

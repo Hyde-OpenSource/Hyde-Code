@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { BUILTIN_TIERS, EFFORT_LEVELS, HYDE_EFFORTS, ROUTING_MODES } from '@hyde/core/routing';
 import { api } from '../api.ts';
 import type { PageProps } from '../ui.tsx';
 
@@ -11,6 +12,20 @@ const STAGES: [string, string, string][] = [
   ['browser', 'Browser verify', 'Open UI changes in Chromium; screenshots as proof of work.'],
   ['policy', 'Policy checks', 'Protected branches, write scope and approvals on agent tool calls.'],
 ];
+
+const MODE_HELP: Record<string, string> = {
+  balanced: 'A strong model plans and reviews; code goes to the tier its complexity needs.',
+  'claude-only': 'Claude models only, by complexity (opus, sonnet, haiku).',
+  'free-first': 'Free models for trivial and low work, Claude for everything else.',
+  'assistant-plans': 'The Hyde AI desktop assistant plans its own requests; the CLIs code.',
+};
+const EFFORT_HELP: Record<string, string> = {
+  saver: 'Every tier thinks one step less (saves quota).',
+  balanced: 'Each tier uses its own effort.',
+  max: 'Every tier thinks one step more.',
+  auto: 'Balanced, but saver for a login above 60% of its 5-hour window.',
+};
+const TIER_LEVELS = ['high', 'medium', 'low', 'trivial'] as const;
 
 const GATEWAYS: [string, string][] = [
   ['telegram', 'Telegram (TELEGRAM_BOT_TOKEN)'],
@@ -86,9 +101,37 @@ export function Settings({ notify, refresh }: PageProps) {
               {a.node && a.node !== 'local' ? ` · node ${a.node}` : ''}
             </div>
             <div>
-              <label htmlFor={`model-${i}`}>Model (empty = CLI default)</label>
+              <label htmlFor={`model-${i}`}>Model for every tier when no tiers are set (empty = CLI default)</label>
               <input id={`model-${i}`} value={a.model ?? ''} onChange={(e) => setAgent(i, { model: e.target.value || undefined })} />
             </div>
+            <fieldset className="tiers">
+              <legend>Model and effort by complexity{BUILTIN_TIERS[a.adapter] && !a.tiers ? ' (built-in)' : ''}</legend>
+              {TIER_LEVELS.map((level) => {
+                const own = a.tiers?.[level] ?? {};
+                const builtin = BUILTIN_TIERS[a.adapter]?.[level];
+                const setTier = (patch: Raw) => {
+                  const next = { ...own, ...patch };
+                  for (const k of Object.keys(next)) if (next[k] === undefined || next[k] === '') delete next[k];
+                  const tiers = { ...a.tiers, [level]: next };
+                  if (!Object.keys(next).length) delete tiers[level];
+                  setAgent(i, { tiers: Object.keys(tiers).length ? tiers : undefined });
+                };
+                return (
+                  <div className="tier-row" key={level}>
+                    <span className="tier-name">{level}</span>
+                    <input aria-label={`${a.name} ${level} model`} placeholder={builtin?.model ?? a.model ?? 'CLI default'} value={own.model ?? ''} onChange={(e) => setTier({ model: e.target.value || undefined })} />
+                    <select aria-label={`${a.name} ${level} effort`} value={own.effort ?? ''} onChange={(e) => setTier({ effort: e.target.value || undefined })}>
+                      <option value="">{builtin?.effort ? `${builtin.effort} (built-in)` : 'effort: default'}</option>
+                      {EFFORT_LEVELS.map((x) => (
+                        <option key={x} value={x}>
+                          {x}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </fieldset>
             <div>
               <label htmlFor={`roles-${i}`}>Roles (plan, implement, review, ui, bulk, triage)</label>
               <input id={`roles-${i}`} value={(a.roles ?? ['plan', 'implement', 'review', 'ui']).join(', ')} onChange={(e) => setAgent(i, { roles: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
@@ -99,6 +142,45 @@ export function Settings({ notify, refresh }: PageProps) {
             </div>
           </div>
         ))}
+      </div>
+
+      <h2>Models and effort</h2>
+      <div className="grid">
+        <div className="card stack">
+          <div>
+            <label htmlFor="routing-mode">Mode</label>
+            <select id="routing-mode" value={raw.routing?.mode ?? 'balanced'} onChange={(e) => update({ ...raw, routing: { ...raw.routing, mode: e.target.value } })}>
+              {ROUTING_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <div className="meta">{MODE_HELP[raw.routing?.mode ?? 'balanced']}</div>
+          </div>
+          <div>
+            <label htmlFor="routing-effort">Hyde effort</label>
+            <select id="routing-effort" value={raw.routing?.effort ?? 'balanced'} onChange={(e) => update({ ...raw, routing: { ...raw.routing, effort: e.target.value } })}>
+              {HYDE_EFFORTS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <div className="meta">{EFFORT_HELP[raw.routing?.effort ?? 'balanced']}</div>
+          </div>
+        </div>
+        <div className="card stack">
+          <label className="row" style={{ color: 'var(--text)', fontSize: 15 }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={raw.routing?.classifier !== false} onChange={(e) => update({ ...raw, routing: { ...raw.routing, classifier: e.target.checked } })} />
+            Ask a cheap model when the rules can't tell a task's complexity
+          </label>
+          <div>
+            <label htmlFor="max-questions">Most questions per plan (the rest become assumptions)</label>
+            <input id="max-questions" type="number" min={0} max={10} value={raw.planner?.maxQuestions ?? 3} onChange={(e) => update({ ...raw, planner: { ...raw.planner, maxQuestions: Number(e.target.value) } })} />
+          </div>
+          <div className="meta">Planning, review and high-complexity code never run on a free model. A task whose tier is out of quota waits instead of moving to a weaker model.</div>
+        </div>
       </div>
 
       <h2>Available on this machine</h2>

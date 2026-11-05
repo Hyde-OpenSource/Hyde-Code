@@ -27,22 +27,24 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO
+- **Status:** DONE
 - **Priority:** high
 - **Files / area:** whole repo (merge only)
 - **Done when:** `agent-hydeai-api/feature/hyde-ai-api` (commit 24509e2, hub client API v1, docs/api.md) is merged into this branch; conflicts in README.md, progress.md and anything else are resolved keeping both sides; the desktop app (apps/desktop/crates/hyde-ai/src/hydecode.rs) still talks to the merged hub; `pnpm test`, `pnpm typecheck` and the desktop tests (`pnpm desktop:test`) pass.
 - **Notes:**
+  - 2026-11-05: Merged 24509e2 (commit 877b0b5); only agents.md conflicted (kept both). Tests 149, typecheck clean, desktop 18 tests.
 
 ## T-002: Complexity tiers, modes and effort levels for every job
 - **Assigned to:** agent-hyde-autonomy
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO
+- **Status:** IN PROGRESS
 - **Priority:** high
 - **Files / area:** apps/hub/src/{agents,planner,orchestrator,config,setup,review}.ts, packages/core/**, packages/adapters/**, apps/web (Settings), hyde.config.example.json, docs
 - **Done when:** (1) Every task gets a complexity level `trivial | low | medium | high` before it runs. A cheap step decides it: rules first (size of the request, files touched, words like rename/typo/bump), then a cheap or free model (OpenCode free model, Haiku, or the desktop assistant's free API) only when the rules can't decide. The level and why are stored as events and shown in the task page. The owner can override it on the task. (2) Each agent profile gets a model per tier instead of one model, for example claude-code: high=opus, medium=sonnet, low=haiku; codex and opencode tiers filled from their real model lists (`codex` model ids, `opencode models`). The owner mentioned "astra" (high) and "sol" (medium) as models: find out whether these exist in any installed CLI; if not, ask main in AgentQuestions.md, and never invent model ids. (3) Effort: a per-tier effort level passed to the CLI (`claude --effort <level>`, codex `-c model_reasoning_effort=...`), plus a hub-wide "Hyde effort" setting (saver / balanced / max / auto) that moves every tier up or down. (4) Modes the owner can pick in setup and Settings: `balanced` (strong model plans and reviews, code by complexity: the default), `claude-only` (Claude models by complexity, no other vendors), `free-first` (free/cheap models for trivial and low, Claude for the rest), `assistant-plans` (the desktop assistant's AI turns requests into tasks, the CLIs code). (5) Hard rules in every mode: planning, review and high-complexity coding never run on a free model; when the right tier is quota-blocked the task waits (or the owner is asked once) instead of silently dropping to a weaker model; every downgrade or upgrade is an event with a reason. (6) The planner prompt and task packet are written for the chosen model (short, clear instructions with the exact files, done-when and checks), so cheap models get tighter instructions. Unit tests for the classifier, the router per mode and tier, and the effort flags; a real `claude -p` run shows the right `--model`/`--effort` per tier.
 - **Notes:**
+  - 2026-11-05: Code, unit and orchestrator tests done (173 tests). Real per-tier hub runs come with T-006. Questions Q-001..Q-004 open (non-blocking).
 
 ## T-003: Stop repeated questions across agents
 - **Assigned to:** agent-hyde-autonomy

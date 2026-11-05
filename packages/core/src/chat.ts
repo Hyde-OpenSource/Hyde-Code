@@ -1,7 +1,8 @@
+import type { Complexity } from './routing.ts';
 // What any chat gateway (Telegram, Slack, Discord, WhatsApp, the web dashboard) exchanges with the hub.
 
 export type Command =
-  | { kind: 'new'; text: string; project?: string; agent?: string }
+  | { kind: 'new'; text: string; project?: string; agent?: string; complexity?: Complexity }
   | { kind: 'client'; text: string; project?: string }
   | { kind: 'status' }
   | { kind: 'agents' }
@@ -14,6 +15,7 @@ export type Command =
   | { kind: 'merge'; taskId: string }
   | { kind: 'promote'; project?: string }
   | { kind: 'retry'; taskId: string }
+  | { kind: 'level'; taskId: string; level: Complexity }
   | { kind: 'lesson'; lessonId: string; approved: boolean }
   | { kind: 'help' };
 

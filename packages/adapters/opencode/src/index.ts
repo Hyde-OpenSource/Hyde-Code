@@ -8,7 +8,7 @@ import {
   type LaunchWrapper,
   type LineParser,
 } from '@hyde/adapter-common';
-import type { DetectResult, HarnessEvent, RunSpec } from '@hyde/core';
+import { clampEffort, type DetectResult, type HarnessEvent, type RunSpec } from '@hyde/core';
 
 // Drives `opencode run --format json` (open source, bring-your-own-provider). The harness
 // config (MCP server, permissions, task packet) goes in through OPENCODE_CONFIG_CONTENT, so the
@@ -49,7 +49,9 @@ export function buildPrompt(spec: RunSpec): string {
 export function buildArgs(spec: RunSpec, resume?: string): string[] {
   const args = ['run', '--format', 'json', '--pure'];
   if (spec.model) args.push('-m', spec.model);
-  if (spec.effort) args.push('--variant', spec.effort);
+  // OpenCode variants stop at high; xhigh/max from the hub's effort setting are clamped.
+  const effort = clampEffort(spec.effort, 'opencode');
+  if (effort) args.push('--variant', effort);
   if (resume) args.push('--session', resume);
   args.push(buildPrompt(spec));
   return args;

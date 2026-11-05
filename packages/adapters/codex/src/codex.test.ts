@@ -93,3 +93,11 @@ describe('quotaFromRateLimits (recorded account/rateLimits/read)', () => {
     expect(quotaFromRateLimits(null)).toEqual([]);
   });
 });
+
+describe('tier model and effort flags', () => {
+  it('passes -m and model_reasoning_effort, including xhigh and max', () => {
+    const args = buildArgs({ cwd: '/w', runDir: '/r', prompt: 'p', model: 'gpt-6-luna', effort: 'xhigh' });
+    expect(args).toEqual(expect.arrayContaining(['-m', 'gpt-6-luna', '-c', 'model_reasoning_effort="xhigh"']));
+    expect(buildArgs({ cwd: '/w', runDir: '/r', prompt: 'p' }).join(' ')).not.toContain('model_reasoning_effort');
+  });
+});

@@ -19,3 +19,39 @@
 
 ## Questions
 <!-- New questions below this line. -->
+
+## Q-001: Codex model ids for "astra" (high) and "sol" (medium)
+- **From:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5)
+- **Date:** 2026-11-05 21:10
+- **Related task:** T-002
+- **Status:** OPEN
+- **Question:** "astra" and "sol" are Codex (OpenAI) models, not Claude or OpenCode. `~/.codex/config.toml` has `model = "gpt-6-astra"` (the owner's Codex default) and a model-availability notice for `"gpt-6.1-sol"`. But `codex debug models` (Codex 0.162.1, catalog fetched 2026-11-03) lists only `gpt-6-luna`, `gpt-5.6-terra`, `gpt-5.6-luna` (plus hidden `gpt-reserve`, `codex-auto-review`). May I use `gpt-6-astra` for Codex high, `gpt-6.1-sol` for Codex medium and `gpt-6-luna` for Codex low/trivial in the example config, the setup wizard and the docs? I have not run Codex (no Codex runs in my role), so I can't prove `gpt-6.1-sol` is usable on this account.
+- **What I already checked:** `codex --help`, `codex debug models`, `~/.codex/models_cache.json`, `~/.codex/config.toml`, `opencode models` (no astra/sol there), `claude --help` (aliases fable, opus, sonnet; haiku works today).
+- **Blocking?:** no. Until answered, Codex has no built-in tier table: a Codex profile without `tiers` uses its one model (the CLI default, gpt-6-astra) for every non-free tier, and nothing in code names astra or sol.
+
+## Q-002: Which models count as "free"
+- **From:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5)
+- **Date:** 2026-11-05 21:10
+- **Related task:** T-002
+- **Status:** OPEN
+- **Question:** The hard rule is "planning, review and high-complexity coding never run on a free model". I treat a model as free when (a) its tier entry says `"free": true`, or (b) it is an OpenCode model in the `opencode/` provider (all ten `opencode models` lists today are free Zen models: beam-free, big-pickle, deepseek-v4.1-flash-free, …). `"free": false` on a tier overrides (b). Free models may only do trivial and low coding work and classification. Is that the right definition? Should big-pickle count as free (it has no `-free` suffix)?
+- **What I already checked:** `opencode models`, `packages/adapters/opencode/src/index.ts` (detect() says "free models only" without a provider login), the owner's config (opencode-1 runs opencode/big-pickle).
+- **Blocking?:** no, implemented as described.
+
+## Q-003: Default tiers for Claude profiles that have only one `model`
+- **From:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5)
+- **Date:** 2026-11-05 21:10
+- **Related task:** T-002
+- **Status:** OPEN
+- **Question:** The owner's `claude-1` has `"model": "haiku"` and no tiers. To fix "a cheap model for every job" without editing `~/.hyde/config.json`, a claude-code profile without `tiers` gets the built-in table: high = opus (effort high), medium = sonnet (medium), low = haiku (low), trivial = haiku (low). Its old single `model` is then ignored, and a notice says so in `hyde agents`. Is that OK, or should the single `model` win until the owner adds `tiers` (in Settings or `hyde setup`)? And should the high tier be `opus` (owner's words) or the newer `fable` alias the Claude CLI also lists?
+- **What I already checked:** `claude --help` (2.1.318: `--model` aliases fable/opus/sonnet; `--effort` low, medium, high, xhigh, max).
+- **Blocking?:** no, implemented with the built-in table and `opus` for high.
+
+## Q-004: Meaning of the "Hyde effort" setting and the default mode
+- **From:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5)
+- **Date:** 2026-11-05 21:10
+- **Related task:** T-002
+- **Status:** OPEN
+- **Question:** I implemented `routing.effort`: `saver` moves every tier's effort one step down, `max` one step up (low < medium < high < xhigh < max, clamped to what the CLI accepts), `balanced` keeps the tier's effort, `auto` acts like balanced but like saver for an account above 60% of its 5-hour window. It changes effort only, never the model (models follow complexity). Default mode `balanced`, default effort `balanced`. Mode names as in tasks.md: balanced, claude-only, free-first, assistant-plans. Are these meanings and defaults what the owner wants?
+- **What I already checked:** tasks.md T-002 (4) and (3).
+- **Blocking?:** no.
