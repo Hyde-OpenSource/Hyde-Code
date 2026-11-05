@@ -113,7 +113,9 @@ export function buildSummary(state: HarnessState, config: HubConfig, pool: Agent
     .sort((a, b) => b.createdSeq - a.createdSeq)
     .slice(0, 20)
     .map((t): ActiveTask => {
-      const run = t.runIds.length ? state.runs.get(t.runIds.at(-1)!) : undefined;
+      // The coding run says who did the work; a plan or review run only while there is none yet.
+      const runs = t.runIds.map((id) => state.runs.get(id)!).filter(Boolean);
+      const run = runs.filter((r) => !['plan', 'review', 'classify'].includes(r.mode)).at(-1) ?? runs.at(-1);
       return {
         id: t.id,
         title: t.title,

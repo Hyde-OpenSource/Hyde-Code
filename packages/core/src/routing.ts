@@ -99,6 +99,8 @@ const HIGH =
   /\b(architecture|re-?architect\w*|redesign\w*|migrat(e|ion|ions)|rewrite|from scratch|security|authenticat\w*|authori[sz]ation|login flow|payments?|billing|encrypt\w*|database schema|concurren\w*|race conditions?|multi-?tenan\w*|scalab\w*|end[- ]to[- ]end|across the (whole|entire) (app|codebase|project|repo)|whole (app|project|repo|system|codebase)|everything|what is remaining|remaining work|complete (this|the) (thing|project|app)|production)\b/i;
 const LOW =
   /(\bREADME\b|\bdocs?\/|\.md\b|\bdocumentation\b|\bcomments?\b|\bdocstrings?\b|\.editorconfig\b|\.gitignore\b|\.env\.example\b|\blicen[cs]e file\b|\bchangelog\b|\badd (a |one )?(unit )?test\b|\bconfig file\b)/i;
+/** Signs the change is code, not docs: then a README or docs mention doesn't make it low. */
+const CODE = /(\bsrc\/|\.(js|mjs|ts|tsx|jsx|py|rs|go|java|rb|php|cs)\b|\b(class|function|method|endpoint|component|api|module|tests? for (every|each|all))\b)/i;
 const MEDIUM =
   /\b(add|implement|build|create|feature|page|screen|endpoint|component|api|button|toggle|form|integrat\w*|support|fix|bug|refactor|validation|filter|search|dark mode)\b/i;
 
@@ -121,7 +123,7 @@ export function classifyByRules(text: string, hints: ClassifyHints = {}): Classi
   if (n > 150 || steps >= 5) return { level: 'high', confident: n > 150, reason: n > 150 ? `long request (${n} words)` : `${steps} steps` };
   if (trivial && n <= 30 && steps < 2) return { level: 'trivial', confident: true, reason: `small edit ("${trivial[0]}", ${n} words)` };
   const low = LOW.exec(text);
-  if (low && n <= 60 && steps < 3) return { level: 'low', confident: true, reason: `docs/config change ("${low[0]}")` };
+  if (low && n <= 60 && steps < 3 && !CODE.test(text)) return { level: 'low', confident: true, reason: `docs/config change ("${low[0]}")` };
   const medium = MEDIUM.exec(text);
   if (medium && n >= 4 && n <= 80) return { level: 'medium', confident: true, reason: `feature or fix ("${medium[0]}")` };
   if (n > 80) return { level: 'high', confident: false, reason: `long request (${n} words); unsure` };
@@ -133,7 +135,8 @@ export function jobLevel(job: 'code' | 'plan' | 'review' | 'classify', complexit
   const level = complexity ?? 'medium';
   if (job === 'classify') return 'trivial';
   if (job === 'plan') return level === 'trivial' || level === 'low' ? 'medium' : 'high';
-  if (job === 'review') return level === 'high' ? 'high' : 'medium';
+  // A strong model reviews medium and high work (the owner's "strong plan/review").
+  if (job === 'review') return level === 'trivial' || level === 'low' ? 'medium' : 'high';
   return level;
 }
 

@@ -18,6 +18,26 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-11-06: End-to-end proof of tiers on real Claude runs, docs, and fixes it found (T-006)
+- **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **What:** Ran real tasks through a scratch hub (scratch git repo with `node --test` checks, scratch HYDE_HOME, port 7493, one claude-code agent with the built-in tiers, mode claude-only, planner and review on, Claude Code 2.1.318). Results (requested model → model the CLI reported, effort):
+  - T-1 "Rename greet to sayHello": rules said trivial, so no planner; coded on haiku → claude-haiku-5-5, effort low; reviewed on sonnet (approve).
+  - T-2 slugify: planned on opus (high) → the planner rated it low → haiku/low.
+  - T-3 TodoStore: rules wrongly rated it low because "README" won over the code signals; the sonnet planner agreed → haiku. Fixed (see below).
+  - T-4 NoteStore, after the fix: rules medium → planned on opus/high, coded on sonnet → claude-sonnet-5-5/medium, reviewed on sonnet.
+  - T-5 "Security: harden parseUser": rules high → planned, coded and reviewed on opus → claude-opus-5-5, effort high.
+  - Every task: checks passed, review approved, 0 questions asked.
+
+  The 5-hour window reached 100% during the run (other sessions used it too). T-1 waited with a `task.waiting` notice ("not moved to a weaker model") and finished after the reset.
+
+  Fixes from the run: (a) the docs/config rule no longer wins when the request names code (`src/`, `.js`, class, function, tests for every …); (b) the planner and classifier get concrete level definitions ("two or more files, or new tests → medium"; "unsure → higher"); (c) after a rate-limited run the hub keeps the reset time the CLI reported instead of overwriting it with a "+1 hour" guess, which made T-1 retry hourly; (d) review of medium work now runs on the high tier (owner: "strong plan/review"; T-4 was reviewed on sonnet); (e) the Hyde AI tab and `/api/summary` show the coding run's model, not the reviewer's; (f) shorter effort labels in the Settings tier editor (they were cut off at 390 px). README has a new "Tiers, modes and effort" section; context.md sections 3, 4, 9 and 12 are updated.
+- **Why:** T-006 done-when: real per-tier runs, no repeated questions, a strong-tier review, docs.
+- **Files:** packages/core/src/routing.ts, apps/hub/src/{orchestrator,planner,summary,routing.test,reliability.test}.ts, apps/web/src/pages/Settings.tsx, apps/desktop/crates/hyde-ai/src/hydecode.rs, README.md, context.md, progress.md, tasks.md
+- **Verified:** `pnpm typecheck` clean, `pnpm test` 197/197, `pnpm desktop:test` 24/24, `pnpm desktop:lint` clean. Playwright screenshots at 1440 and 390 px: the task page (complexity card, planner assumptions, runs table with tier and effort), Settings (mode, Hyde effort, tier editor), and the Hyde AI desktop "Hyde Code" tab (level pill, agent, model and effort per task). No layout problems after fix (f). The only console error is the existing manifest syntax error. Quota used: the 5-hour window went from 22% (after the reset) to 41%; the 7-day window is at 76%.
+- **Cleanup:** stopped the scratch hub and desktop UI; deleted the scratch repo, HYDE_HOME, the six Claude session folders under ~/.claude/projects, the screenshots, and the `.playwright-mcp` folder the screenshot tool created in the HYDE CODE copy. ~/.claude.json still has 28 project entries, the same as before (no trust record added).
+- **Open / follow-ups:** T-4 ran before fix (d), so the opus review of medium work has unit tests only. Q-001..Q-004 are still open.
+
 ### 2026-11-05: Hyde AI assistant as the front desk, hub API v2 (T-005)
 - **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
 - **Branch:** agent-hyde-autonomy/feature/smart-routing

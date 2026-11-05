@@ -39,11 +39,12 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** IN PROGRESS
+- **Status:** DONE
 - **Priority:** high
 - **Files / area:** apps/hub/src/{agents,planner,orchestrator,config,setup,review}.ts, packages/core/**, packages/adapters/**, apps/web (Settings), hyde.config.example.json, docs
 - **Done when:** (1) Every task gets a complexity level `trivial | low | medium | high` before it runs. A cheap step decides it: rules first (size of the request, files touched, words like rename/typo/bump), then a cheap or free model (OpenCode free model, Haiku, or the desktop assistant's free API) only when the rules can't decide. The level and why are stored as events and shown in the task page. The owner can override it on the task. (2) Each agent profile gets a model per tier instead of one model, for example claude-code: high=opus, medium=sonnet, low=haiku; codex and opencode tiers filled from their real model lists (`codex` model ids, `opencode models`). The owner mentioned "astra" (high) and "sol" (medium) as models: find out whether these exist in any installed CLI; if not, ask main in AgentQuestions.md, and never invent model ids. (3) Effort: a per-tier effort level passed to the CLI (`claude --effort <level>`, codex `-c model_reasoning_effort=...`), plus a hub-wide "Hyde effort" setting (saver / balanced / max / auto) that moves every tier up or down. (4) Modes the owner can pick in setup and Settings: `balanced` (strong model plans and reviews, code by complexity: the default), `claude-only` (Claude models by complexity, no other vendors), `free-first` (free/cheap models for trivial and low, Claude for the rest), `assistant-plans` (the desktop assistant's AI turns requests into tasks, the CLIs code). (5) Hard rules in every mode: planning, review and high-complexity coding never run on a free model; when the right tier is quota-blocked the task waits (or the owner is asked once) instead of silently dropping to a weaker model; every downgrade or upgrade is an event with a reason. (6) The planner prompt and task packet are written for the chosen model (short, clear instructions with the exact files, done-when and checks), so cheap models get tighter instructions. Unit tests for the classifier, the router per mode and tier, and the effort flags; a real `claude -p` run shows the right `--model`/`--effort` per tier.
 - **Notes:**
+  - 2026-11-06: DONE: real per-tier runs in T-006 (haiku/low, sonnet/medium, opus/high in the run records).
   - 2026-11-05: Code, unit and orchestrator tests done (173 tests). Real per-tier hub runs come with T-006. Questions Q-001..Q-004 open (non-blocking).
 
 ## T-003: Stop repeated questions across agents
@@ -87,11 +88,12 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO
+- **Status:** DONE
 - **Priority:** medium
 - **Files / area:** README.md, docs/**, context.md (sections 3, 4, 9, 12), progress.md
 - **Done when:** On a scratch git repo (never the owner's real projects), with a scratch HYDE_HOME, three real tasks run through the hub: a trivial one (rename) on the cheap tier, a medium one on Sonnet, a high one planned and coded on Opus, each with the right `--model`/`--effort` in the run record, no repeated questions, and a review on the strong tier. Watch quota and pause at 80% of the 5-hour window. README and docs explain tiers, modes and effort. progress.md has one entry per task with what, why, files and how it was verified. Scratch repos, homes and Claude session files from the tests are deleted.
 - **Notes:**
+  - 2026-11-06: DONE: 5 real tasks on the scratch hub; fixes and docs in progress.md (2026-11-06).
 
 
 

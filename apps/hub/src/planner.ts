@@ -117,7 +117,7 @@ export function plannerPrompt(input: PlannerInput): string {
     `- Ask only what blocks the work: a choice where a wrong guess means redoing it, a missing credential, or anything risky. At most ${max} question(s), each blocking=true. If there is nothing like that, return no questions.`,
     '- Every other unclear detail (wording, naming, file placement, small style choices) is NOT a question: decide it in the spirit of the request and the repo conventions, and write it in "assumptions" so the owner can see and change it.',
     '- Never repeat a question that was answered or is already waiting, even in other words.',
-    '- complexity: trivial (a rename, typo or one-line change), low (one small file or docs/config), medium (a feature or fix across a few files), high (design work, many files, security, data or anything risky). complexityReason says why in one sentence.' +
+    '- complexity: trivial (a rename, typo or one-line change); low (one small change in one file, or docs/config only, no new behaviour to test); medium (new behaviour or a fix that touches two or more files, or needs new tests); high (design work, many files, security, data, or anything risky or vague). When unsure between two levels, pick the higher one. complexityReason says why in one sentence.' +
       (input.guess ? ` The hub's rules guessed ${input.guess.level} (${input.guess.reason}); confirm or correct it.` : ''),
     '- Split the work into the fewest tasks that can each be done and verified on their own. One task is fine for small requests.',
     '- Every task needs a self-contained spec written for the agent that will do it: the exact files to change, the steps, and the commands that prove it works. Cheap models will run trivial and low tasks, so be concrete; never say "see above".',
@@ -144,7 +144,7 @@ export function classifyPrompt(input: { title: string; spec: string; guess: { le
   return [
     'Rate how hard this coding request is. Do not change anything and do not plan it. You may glance at the repository layout.',
     HARNESS_MODE_LINE,
-    'Levels: trivial (a rename, typo or one-line change), low (one small file, docs or config), medium (a feature or fix across a few files), high (design work, many files, security, data, or anything risky or vague).',
+    'Levels: trivial (a rename, typo or one-line change); low (one small change in one file, or docs/config only, no new behaviour to test); medium (new behaviour or a fix that touches two or more files, or needs new tests); high (design work, many files, security, data, or anything risky or vague). When unsure between two levels, pick the higher one.',
     `The rules guessed ${input.guess.level} (${input.guess.reason}).`,
     '',
     `Request: ${input.title}`,

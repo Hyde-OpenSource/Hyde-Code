@@ -121,7 +121,7 @@ export function Settings({ notify, refresh }: PageProps) {
                     <span className="tier-name">{level}</span>
                     <input aria-label={`${a.name} ${level} model`} placeholder={builtin?.model ?? a.model ?? 'CLI default'} value={own.model ?? ''} onChange={(e) => setTier({ model: e.target.value || undefined })} />
                     <select aria-label={`${a.name} ${level} effort`} value={own.effort ?? ''} onChange={(e) => setTier({ effort: e.target.value || undefined })}>
-                      <option value="">{builtin?.effort ? `${builtin.effort} (built-in)` : 'effort: default'}</option>
+                      <option value="">{builtin?.effort ?? 'default'}</option>
                       {EFFORT_LEVELS.map((x) => (
                         <option key={x} value={x}>
                           {x}

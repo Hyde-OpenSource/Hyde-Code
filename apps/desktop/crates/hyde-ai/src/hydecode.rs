@@ -808,10 +808,24 @@ pub fn summary(hub: &Hub, default_project: &str) -> Value {
         .unwrap_or_default();
     for task in tasks.iter_mut() {
         let id = task.get("id").cloned();
-        let last = runs
+        // The run that wrote the code says who did the work; plan and review runs only if there is none yet.
+        let seq = |r: &&Value| r.get("dispatchedSeq").and_then(Value::as_u64).unwrap_or(0);
+        let mine: Vec<&Value> = runs
             .iter()
             .filter(|r| r.get("taskId") == id.as_ref())
-            .max_by_key(|r| r.get("dispatchedSeq").and_then(Value::as_u64).unwrap_or(0));
+            .collect();
+        let coding = |r: &&&Value| {
+            !matches!(
+                r.get("mode").and_then(Value::as_str),
+                Some("plan" | "review" | "classify")
+            )
+        };
+        let last = mine
+            .iter()
+            .filter(coding)
+            .max_by_key(|r| seq(r))
+            .or_else(|| mine.iter().max_by_key(|r| seq(r)))
+            .copied();
         if let Some(run) = last {
             task["run"] = pick(
                 run,

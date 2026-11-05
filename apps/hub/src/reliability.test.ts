@@ -108,6 +108,18 @@ describe('real-run failures (T-004)', () => {
     expect(readFileSync(art.path, 'utf8')).toContain('Invalid schema for response_format');
   });
 
+  it('keeps the reset time the CLI reported after a rate-limited run instead of guessing an hour', async () => {
+    const limited: Turn = async () => [
+      { type: 'rate_limit', status: 'rejected', window: 'five_hour', utilization: 1, resetsAt: Math.floor(h.clock.now / 1000) + 4 * 3600 },
+      { type: 'run.failed', reason: 'rate_limit', detail: 'limit' },
+    ];
+    h = await makeHarness({ agents: [{ name: 'claude-1', vendor: 'anthropic', turns: [limited] }] });
+    await h.o.handle(h.inbound({ kind: 'new', text: 'Add a hello file' }));
+    await h.until(() => h.o.state.runs.get('run-1')?.state === 'exited' && status('T-1') === 'ready', 'rate limited');
+    const q = h.o.state.quotas.get('claude-1:five_hour')!;
+    expect(q.resetsAt).toBe(Math.floor(h.clock.now / 1000) + 4 * 3600);
+  });
+
   it('records a quota window only when it really changes (Codex resetsAt drifted every 5 minutes)', async () => {
     h = await makeHarness({ agents: [{ name: 'codex-1', vendor: 'openai', turns: [] }] });
     const adapter = h.adapters['codex-1']! as unknown as { quota: () => Promise<QuotaSnapshot[]> };

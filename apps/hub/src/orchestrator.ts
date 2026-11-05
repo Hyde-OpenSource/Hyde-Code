@@ -626,7 +626,10 @@ export class Orchestrator {
     }
     if (failure?.reason === 'rate_limit') {
       this.setStatus(task, 'ready', 'rate limited; waiting for the window to reset');
-      this.recordQuota(run.account, { window: 'five_hour', status: 'rejected', resetsAt: Math.floor(this.now() / 1000) + 3600 });
+      // Keep the reset time the CLI reported; guess an hour only when none is known
+      // (the guess made T-1 of the 2026-11-06 run retry hourly before the real 01:30 reset).
+      const known = accountQuota(this.state, run.account, this.now()).blockedUntil;
+      if (!known) this.recordQuota(run.account, { window: 'five_hour', status: 'rejected', resetsAt: Math.floor(this.now() / 1000) + 3600 });
       return;
     }
     // A resumed session that prints nothing is the same as stopping without complete_task

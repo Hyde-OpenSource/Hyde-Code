@@ -28,6 +28,8 @@ describe('complexity rules', () => {
     expect(classifyByRules('Add a dark mode toggle to the settings page')).toMatchObject({ level: 'medium', confident: true });
     expect(classifyByRules('Migrate the database schema to the new user model')).toMatchObject({ level: 'high', confident: true });
     expect(classifyByRules('Add authentication with magic links')).toMatchObject({ level: 'high' });
+    // From the T-006 real run: a README mention must not make a code feature "low".
+    expect(classifyByRules('Add an in-memory TodoStore class in src/todos.js with add, complete, remove and list, plus tests for every method in test/todos.test.js, and a short usage section in README.md')).toMatchObject({ level: 'medium' });
     expect(classifyByRules('Build it', { size: 'L' })).toMatchObject({ level: 'high', confident: true });
   });
 
@@ -45,6 +47,7 @@ describe('tiers and effort', () => {
     expect(jobLevel('plan', 'medium')).toBe('high');
     expect(jobLevel('review', 'low')).toBe('medium');
     expect(jobLevel('review', 'high')).toBe('high');
+    expect(jobLevel('review', 'medium')).toBe('high');
     expect(jobLevel('code', undefined)).toBe('medium');
     expect(tierFor({ high: { model: 'opus' }, medium: { model: 'sonnet' } }, 'trivial')).toEqual({ level: 'medium', spec: { model: 'sonnet' } });
     expect(tierFor({ low: { model: 'haiku' } }, 'high')).toBeUndefined();

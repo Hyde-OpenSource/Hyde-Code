@@ -149,8 +149,9 @@ overwrites an existing hook). Also turn on GitHub branch protection.
    WhatsApp) that you accept first. Client text is always treated as data, never as instructions.
 2. **Plan** (optional): a planner asks questions and splits the work into subtasks with a done-when,
    a write scope and dependencies. Big plans wait for your approval.
-3. **Route**: each subtask goes to the best agent by role, quota headroom and recent failures.
-   New runs wait while an account is above its quota soft ceiling.
+3. **Rate and route**: every task gets a complexity level (see below); each run goes to an agent
+   that serves that tier, by role, quota headroom and recent failures. New runs wait while an
+   account is above its quota soft ceiling, rather than drop to a weaker model.
 4. **Execute**: the agent works on `<agent>/feature/t-<n>-<slug>` in its own worktree, cut from the
    latest `origin/<base>`. It asks you through `ask_question`; your answer resumes the same session.
 5. **Verify**: project checks, then (optional) a browser check with screenshots as proof of work.
@@ -163,10 +164,50 @@ A policy hook checks Claude's tool calls (no pushes, merges, protected checkouts
 edits outside the write scope; new dependencies need your approval) and pauses an agent after
 repeated denials. Agents propose lessons; approved ones go into `CLAUDE.md` and `AGENTS.md`.
 
+## Tiers, modes and effort
+
+**Complexity.** Every task is rated `trivial`, `low`, `medium` or `high` before it runs. Hub rules
+decide first (rename or typo → trivial, docs or config → low, a feature or fix → medium,
+security, migrations, "the whole app" or anything vague → high). When the rules are only
+guessing, the planner decides; with no planner, a cheap read-only run decides. A Hyde AI hint
+counts only when the rules can't tell. You can change it any time with `/level T-3 high`, the
+buttons on the task page, or `POST /api/tasks/:id/level`. Trivial tasks skip the planner.
+
+**Models per tier.** Each agent maps the four levels to a model and an effort (`tiers` in the
+config, or the tier editor in Settings). Claude Code has them built in:
+
+| Level | Claude model | Effort | Used for |
+|---|---|---|---|
+| high | opus | high | high coding; planning and review of medium and high work |
+| medium | sonnet | medium | medium coding; planning and review of trivial and low work |
+| low | haiku | low | low coding |
+| trivial | haiku | low | renames, typos, one-liners |
+
+Other adapters use their one `model` for every tier until you add `tiers`. If an agent has no
+entry for a level, it uses its next stronger tier, never a weaker one. The hub states every
+upgrade on the run (`why`).
+
+**Modes** (`routing.mode`, also in `hyde setup` and Settings):
+- `balanced` (default): a strong model plans and reviews, and code goes to the tier its complexity needs.
+- `claude-only`: Claude models only, by complexity. Claude may review its own work in a fresh session.
+- `free-first`: free models (OpenCode's `opencode/*`) take trivial and low work; Claude takes the rest.
+- `assistant-plans`: the Hyde AI desktop assistant writes the task for its own requests and the hub
+  doesn't plan them again; the CLIs code. In every other mode the assistant's free model only routes.
+
+**Hyde effort** (`routing.effort`): `saver` moves every tier's effort one step down, `max` one step
+up, `balanced` keeps it, and `auto` acts like saver when a login is above 60% of its 5-hour window.
+
+**Hard rules in every mode:** planning, review and high-complexity coding never run on a free
+model. When the right tier is out of quota, the task waits (and you are told once) instead of
+moving to a weaker model. An agent that stops without `complete_task` is nudged once, then the
+task moves one tier up to another agent in the same worktree. Questions are asked once: a repeat
+from any agent gets the earlier answer, or is linked to the open question. The planner asks at
+most `planner.maxQuestions` blocking questions; everything else becomes an assumption you can see.
+
 ## Commands (chat, dashboard or `hyde <command>`)
 
 `/new <task> #project @agent`, `/client <message>`, `/status`, `/agents`, `/usage`, `/logs T-3`,
-`/stop T-3`, `/stop all`, `/retry T-3`, `/answer Q-2 <text>`, `/approve A-1`, `/deny A-1`,
+`/stop T-3`, `/stop all`, `/retry T-3`, `/level T-3 high`, `/answer Q-2 <text>`, `/approve A-1`, `/deny A-1`,
 `/approve L-1` (lessons), `/merge T-3`, `/promote #project`, `/projects`. Slack and Discord also
 accept `hyde new …` and `!new …`.
 
