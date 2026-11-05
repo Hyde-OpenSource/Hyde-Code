@@ -22,8 +22,11 @@
 
 | Agent name | Model | Type | Role | Status | Branch | Last seen |
 |---|---|---|---|---|---|---|
-| main | Claude Opus 5.5 (claude-opus-5-5) | main | main agent | online | feature/phase0-core | 2026-10-27 |
+| main | Claude Opus 5.5 (claude-opus-5-5) | main | main agent | online | feature/hyde-ai | 2026-11-05 |
+| agent-hyde-autonomy | Claude Opus 5.5 (claude-opus-5-5) | child | autonomy and routing engineer | online | agent-hyde-autonomy/feature/smart-routing | 2026-11-05 |
 
 ## Log
 <!-- - YYYY-MM-DD HH:MM: <agent>: <message> (e.g. "online", "took T-003", "offline") -->
 - 2026-10-27 01:10: main: online, set up workspace, building Phase 0 on feature/phase0-core
+- 2026-11-05: main: created agent-hyde-autonomy (Claude only), worktree /mnt/NewVolume/D/PROJECTS/HYDE AUTONOMY, tasks T-001..T-006
+- 2026-11-05: agent-hyde-autonomy: online (Claude Opus 5.5, child), took T-001..T-006
