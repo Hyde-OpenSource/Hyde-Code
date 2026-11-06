@@ -196,6 +196,16 @@
 - **Verified:** `pnpm test` 132 passing, `pnpm typecheck` clean (the web tsconfig turns off noUncheckedIndexedAccess and verbatimModuleSyntax so the upstream files compile unchanged; hub and packages keep them). Playwright screenshots of the office (light, dark, 390 px phone), task page; no console errors. Live demo task T-6 on OpenCode: the agent walked to its desk, the monitor lit, the thought bubble showed its tool calls, idle agents walked over to Hyde with suck-up lines, ASK ME showed the planner's questions; answered them from the CLI, stopped T-6 at its push approval (no PR) and removed its worktree.
 - **Open / follow-ups:** The floor only looks exactly like Munder Difflin's once the owner imports LimeZu "Modern Interiors"; whether the pack's files match the map's three sheets byte for byte is unverified (the importer falls back to picking files by hand). Local demo branches for T-5 and T-6 are kept.
 
+
+### 2026-10-29: T-4: Add a .editorconfig at the repo root: utf-8, LF line endings, final n...
+- **Agent:** opencode-1 (opencode/big-pickle)
+- **Branch:** opencode-1/feature/t-4-add-a-editorconfig-at-the-repo-root-utf
+- **What:** Added .editorconfig at repo root with utf-8, LF, final newline, trim trailing whitespace, and 2-space indent for all files.
+- **Why:** Requested via cli: Add a .editorconfig at the repo root: utf-8, LF line endings, final newline, trim trailing whitespace, 2-space indent for all files. Nothing else.
+- **Files:** .editorconfig
+- **Verified:** Verified .editorconfig contains exactly the required settings. Committed the change.; reviewed by claude-1: approve
+- **Open / follow-ups:** none
+
 ### 2026-10-29: Office UI redesign (web) and a terminal UI
 - **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
 - **Branch:** feature/office-ui
@@ -249,8 +259,6 @@
 - **Files:** CLAUDE.md, context.md, progress.md, agents.md, AgentQuestions.md, AgentAnswers.md, role.md, tasks.md, report.md, docs/plan.md
 - **Verified:** `git branch -a` shows main and staging at 4ebbcf3; the bootstrap script reported every file as created.
 - **Open / follow-ups:** No remote yet (owner will give URLs).
-
-
 
 ## History (rebuilt from earlier records)
 <!-- Filled from git log / older notes at setup time. Leave empty if there was no history. -->
