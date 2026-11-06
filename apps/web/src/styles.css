@@ -296,3 +296,31 @@ main.office-main { height: calc(100vh - var(--topbar-h)); }
 .tier-row .tier-name { font-size: 13px; }
 .tier-row input, .tier-row select { min-width: 0; width: 100%; }
 .skill-text { white-space: pre-wrap; max-height: 320px; overflow: auto; }
+
+/* Live browser (task page) */
+.live-browser { margin-bottom: 16px; }
+.live-url { font-size: 12px; color: var(--cth-ink-500); overflow-wrap: anywhere; }
+.live-stage { position: relative; width: 100%; background: var(--cth-ink-900); overflow: hidden; box-shadow: inset 0 0 0 1px var(--cth-ink-300); }
+.live-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.live-stage.taking-over { cursor: crosshair; outline: 2px solid var(--cth-status-working); }
+.live-box { position: absolute; border: 2px solid var(--cth-status-thinking); border-radius: 3px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.08); pointer-events: none; transition: all 0.35s ease; }
+.live-cursor { position: absolute; width: 22px; height: 33px; margin: -2px 0 0 -2px; pointer-events: none; transition: left 0.45s ease, top 0.45s ease; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6)); }
+.live-cursor path { fill: #fff; stroke: #111; stroke-width: 1.4; }
+.live-ripple { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 50%; border: 3px solid var(--cth-status-thinking); pointer-events: none; animation: live-ripple 0.8s ease-out forwards; }
+@keyframes live-ripple { from { transform: scale(0.3); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+.live-caption { position: absolute; left: 8px; right: 8px; bottom: 8px; padding: 6px 10px; background: rgba(0, 0, 0, 0.72); color: #fff; font-size: 13px; overflow-wrap: anywhere; }
+.live-paused { position: absolute; top: 8px; right: 8px; padding: 2px 8px; background: var(--cth-status-working); color: #000; font-size: 12px; }
+.live-steps { display: flex; gap: 6px; overflow-x: auto; padding: 0; margin: 0; list-style: none; }
+.live-step { display: flex; flex-direction: column; gap: 4px; width: 132px; padding: 4px; border: 0; background: var(--cth-cream-100); box-shadow: inset 0 0 0 1px var(--cth-ink-100); cursor: pointer; font-size: 12px; text-align: left; color: var(--cth-ink-900); }
+.live-step.on { box-shadow: inset 0 0 0 2px var(--cth-status-thinking); }
+.live-step.bad { box-shadow: inset 0 0 0 2px var(--cth-status-blocked); }
+.live-step img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+@media (prefers-reduced-motion: reduce) { .live-cursor, .live-box { transition: none; } .live-ripple { animation: none; opacity: 0; } }
+.work { margin-bottom: 16px; }
+.todos { list-style: none; padding: 0; margin: 0; }
+.todos li { padding: 3px 0; overflow-wrap: anywhere; }
+.todos li.done { color: var(--cth-ink-500); text-decoration: line-through; }
+.files { width: 100%; font-size: 13px; }
+.files td { padding: 2px 4px; overflow-wrap: anywhere; }
+.files td.add { color: var(--cth-status-success); text-align: right; white-space: nowrap; }
+.files td.del { color: var(--cth-status-blocked); text-align: right; white-space: nowrap; }

@@ -240,6 +240,31 @@ export const eventPayloads = {
     decision: z.enum(['allow', 'deny', 'approval']),
     rule: z.string(),
   }),
+  /** The task's checklist (agent update_todos, planner seed or owner edit); the latest wins. */
+  'task.todos_updated': z.object({
+    taskId: z.string(),
+    todos: z.array(z.object({ text: z.string(), done: z.boolean() })),
+    by: z.string(),
+  }),
+  /** Plan then build: the owner must approve the plan before the build run (default for high complexity). */
+  'task.plan_gate_set': z.object({ taskId: z.string(), on: z.boolean(), by: z.string() }),
+  /** One step an agent took in the live browser (frames are not logged; keyframes are artifacts). */
+  'browser.action': z.object({
+    taskId: z.string(),
+    runId: z.string(),
+    step: z.number().int(),
+    op: z.string(),
+    label: z.string(),
+    url: z.string(),
+    ok: z.boolean(),
+    error: z.string().optional(),
+    text: z.string().optional(),
+    box: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    viewport: z.object({ width: z.number(), height: z.number() }),
+    artifactId: z.string().optional(),
+  }),
   /** The skills a task's runs get (planner choice or the owner's change). */
   'task.skills_set': z.object({ taskId: z.string(), skills: z.array(z.string()), by: z.string() }),
   /** An agent proposes a new skill; nothing is saved until the owner approves. */

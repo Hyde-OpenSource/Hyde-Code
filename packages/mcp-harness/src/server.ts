@@ -4,7 +4,7 @@ import { z } from 'zod';
 // The tools every agent uses to talk to the harness (docs/plan.md: "Give every worker a
 // harness MCP server"). Unattended runs have no AskUserQuestion, so ask_question is the way in.
 
-export const TOOLS = ['ask_question', 'report_progress', 'complete_task', 'request_approval', 'propose_lesson', 'propose_skill'] as const;
+export const TOOLS = ['ask_question', 'report_progress', 'complete_task', 'request_approval', 'propose_lesson', 'propose_skill', 'update_todos'] as const;
 export type HubCall = (tool: (typeof TOOLS)[number], args: unknown) => Promise<string>;
 
 export function createHarnessServer(call: HubCall): McpServer {
@@ -83,6 +83,17 @@ export function createHarnessServer(call: HubCall): McpServer {
       inputSchema: { text: z.string().min(10).max(300).describe('The lesson as a rule, e.g. "Run migrations before seeding"') },
     },
     (args) => reply('propose_lesson', args),
+  );
+
+  server.registerTool(
+    'update_todos',
+    {
+      description:
+        'Keep your checklist for this task up to date: the full list each time, with done=true for finished steps. ' +
+        'The owner watches it live. Update it when you start, after each step, and before complete_task.',
+      inputSchema: { todos: z.array(z.object({ text: z.string().min(1).max(200), done: z.boolean() })).min(1).max(30) },
+    },
+    (args) => reply('update_todos', args),
   );
 
   server.registerTool(

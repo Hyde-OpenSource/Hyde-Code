@@ -49,6 +49,9 @@ import { decide as decidePolicy, hookResponse } from './policy-engine.ts';
 import { blockingFindings, parseReview, REVIEW_SCHEMA, reviewFixPrompt, reviewPrompt } from './review.ts';
 import { deliverSkills, discoverSkills, isSkillName, withExcludes, writeSkill, type Skill } from '@hyde/skills';
 import { existsSync, readFileSync } from 'node:fs';
+import { needsApproval } from '@hyde/browser-live';
+import { copyFileSync, rmSync } from 'node:fs';
+import { LiveBrowser } from './live.ts';
 import { findMatch, questionOf } from './questions.ts';
 import { readWorkflow, renderTemplate, type Workflow } from './workflow.ts';
 
@@ -74,6 +77,7 @@ export interface OrchestratorDeps {
   workflow?: (project: ProjectConfig) => Promise<Workflow>;
   log?: (msg: string) => void;
   now?: () => number;
+  live?: LiveBrowser;
 }
 
 interface LiveRun {
@@ -106,6 +110,8 @@ export class Orchestrator {
   private readonly now: () => number;
   private readonly browser: NonNullable<OrchestratorDeps['browser']>;
   private readonly workflow: NonNullable<OrchestratorDeps['workflow']>;
+  /** The live browser channel (frames in memory, previews per task). */
+  readonly browserLive: LiveBrowser;
 
   constructor(private readonly deps: OrchestratorDeps) {
     this.state = replay(deps.store.list());
@@ -117,6 +123,7 @@ export class Orchestrator {
     this.now = deps.now ?? Date.now;
     this.browser = deps.browser ?? browserCheck;
     this.workflow = deps.workflow ?? readWorkflow;
+    this.browserLive = deps.live ?? new LiveBrowser();
   }
 
   get config(): HubConfig {
@@ -148,6 +155,7 @@ export class Orchestrator {
 
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    this.browserLive.stopAll();
     for (const run of this.live.values()) await run.adapter.interrupt(run.handle);
   }
 
@@ -430,7 +438,7 @@ export class Orchestrator {
       mcp: {
         command: profile.isolation === 'container' ? 'node' : process.execPath,
         args: ['--import', this.deps.tsxLoader, MCP_MAIN],
-        env: { HYDE_HUB_URL: hubUrl, HYDE_RUN_TOKEN: token },
+        env: { HYDE_HUB_URL: hubUrl, HYDE_RUN_TOKEN: token, ...(!readOnly && this.wantsBrowser(task, project) && { HYDE_BROWSER: '1' }) },
       },
       allow: policy.allow,
       deny: policy.deny,
@@ -797,6 +805,32 @@ export class Orchestrator {
     });
   }
 
+  // ---------------------------------------------------------------- todos and plan then build
+
+  private setTodos(task: TaskView, todos: { text: string; done: boolean }[], by: string): void {
+    this.append({ type: 'task.todos_updated', taskId: task.id, payload: { taskId: task.id, todos, by } });
+  }
+
+  /** Plan then build: the owner approves the plan before coding. On by default for high complexity. */
+  private planGate(task: TaskView): boolean {
+    return task.planGate ?? task.complexity?.level === 'high';
+  }
+
+  /** Files changed on the task branch (committed or not) with +/− line counts. */
+  async filesTouched(taskId: string): Promise<{ path: string; added: number; removed: number }[]> {
+    const task = this.state.tasks.get(taskId);
+    if (!task?.worktree) return [];
+    const host = this.deps.host(task.node ?? 'local');
+    const base = await this.baseRef(host, this.project(task.projectId).path, task.baseBranch!);
+    const r = await host.run(task.worktree, `git diff --numstat ${JSON.stringify(base)}`, 30_000);
+    if (!r.ok) return [];
+    return r.output
+      .split('\n')
+      .map((l) => /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(l.trim()))
+      .filter((m): m is RegExpExecArray => Boolean(m))
+      .map((m) => ({ path: m[3]!, added: m[1] === '-' ? 0 : Number(m[1]), removed: m[2] === '-' ? 0 : Number(m[2]) }));
+  }
+
   // ---------------------------------------------------------------- skills
 
   /** Where approved skills go: the user's skill folder next to the config (~/.hyde/skills). */
@@ -1010,6 +1044,18 @@ export class Orchestrator {
       });
       if (only?.complexity && !plan.complexity && task.complexity?.by !== 'owner') this.classified(task, only.complexity, 'planner', `planned by ${run.agent}`);
       if (only?.skills && task.skills === undefined) this.setSkills(task, only.skills, `planner ${run.agent}`);
+      if (only?.steps.length) this.setTodos(task, only.steps.map((text) => ({ text, done: false })), `planner ${run.agent}`);
+      if (this.planGate(this.state.tasks.get(task.id)!)) {
+        const steps = only?.steps.length ? only.steps.map((s, i) => `${i + 1}. ${s}`).join('\n') : (only?.doneWhen ?? task.title);
+        const approvalId = this.requestApproval(task, 'plan', `Plan for ${task.id} (plan then build)`);
+        this.setStatus(task, 'blocked', `waiting for ${approvalId} (plan then build)`, { kind: 'approval', id: approvalId });
+        await this.notifyTask(task, {
+          text: `📋 Plan for ${task.id} (${task.title}), ${this.state.tasks.get(task.id)!.complexity?.level ?? 'medium'}:\n${steps}${only?.doneWhen ? `\nDone when: ${only.doneWhen}` : ''}\n\n${approvalId}: build it?`,
+          buttons: [[{ label: 'Build it', action: { kind: 'decide', approvalId, approved: true } }, { label: 'Cancel', action: { kind: 'decide', approvalId, approved: false } }]],
+        });
+        if (assumptions.length) await this.notifyAssumptions(task, assumptions);
+        return;
+      }
       this.setStatus(task, 'ready', 'planned as one task');
       if (assumptions.length) await this.notifyAssumptions(task, assumptions);
       return;
@@ -1044,13 +1090,15 @@ export class Orchestrator {
     }
     this.append({ type: 'task.planned', taskId: task.id, payload: { taskId: task.id, runId, children: [...ids.values()], assumptions } });
     for (const t of plan.tasks) if (t.skills) this.setSkills(this.state.tasks.get(ids.get(t.key)!)!, t.skills, `planner ${run.agent}`);
+    for (const t of plan.tasks) if (t.steps.length) this.setTodos(this.state.tasks.get(ids.get(t.key)!)!, t.steps.map((text) => ({ text, done: false })), `planner ${run.agent}`);
+    this.setTodos(task, plan.tasks.map((t) => ({ text: `${ids.get(t.key)}: ${t.title}`, done: false })), `planner ${run.agent}`);
     for (const id of ids.values()) {
       const child = this.state.tasks.get(id)!;
       if (!child.complexity) this.classifyNew(child);
     }
     if (assumptions.length) await this.notifyAssumptions(task, assumptions);
     const summary = plan.tasks.map((t) => `${ids.get(t.key)} [${t.size}${t.complexity ? `, ${t.complexity}` : ''}] ${t.title}${t.dependsOn.length ? ` (after ${t.dependsOn.map((k) => ids.get(k)).join(', ')})` : ''}`).join('\n');
-    if (plan.tasks.length > this.config.planner.approvalOver || plan.tasks.some((t) => t.size === 'L')) {
+    if (plan.tasks.length > this.config.planner.approvalOver || plan.tasks.some((t) => t.size === 'L') || this.planGate(this.state.tasks.get(task.id)!)) {
       const approvalId = this.requestApproval(task, 'plan', `Plan for ${task.id}: ${plan.tasks.length} subtasks`);
       this.setStatus(task, 'blocked', `waiting for ${approvalId}`, { kind: 'approval', id: approvalId });
       await this.notifyTask(task, {
@@ -1443,6 +1491,30 @@ export class Orchestrator {
       }
       case 'skills':
         return this.skillsCommand(command, inbound, actor);
+      case 'todos': {
+        const task = this.state.tasks.get(command.taskId);
+        if (!task) return `No task ${command.taskId}.`;
+        return task.todos.length ? `${task.id} checklist (${task.todos.filter((t) => t.done).length}/${task.todos.length}):\n${task.todos.map((t) => `${t.done ? '☑' : '☐'} ${t.text}`).join('\n')}` : `${task.id} has no checklist yet.`;
+      }
+      case 'plan': {
+        const task = this.state.tasks.get(command.taskId);
+        if (!task) return `No task ${command.taskId}.`;
+        if (command.on !== undefined) {
+          this.deps.store.append({ type: 'task.plan_gate_set', actor, taskId: task.id, commandId: inbound.commandId, payload: { taskId: task.id, on: command.on, by: inbound.userId } });
+          return `${task.id}: plan then build is ${command.on ? 'on: you approve the plan before any code is written' : 'off'}.`;
+        }
+        const open = [...this.state.approvals.values()].find((a) => a.taskId === task.id && a.kind === 'plan' && a.status === 'open');
+        return [
+          `${task.id}: ${task.title} (${task.complexity?.level ?? 'unrated'}${this.planGate(task) ? ', plan then build' : ''})`,
+          task.doneWhen ? `Done when: ${task.doneWhen}` : '',
+          ...task.todos.map((t, i) => `${i + 1}. ${t.done ? '☑ ' : ''}${t.text}`),
+          ...task.children.map((id) => `${id}: ${this.state.tasks.get(id)?.title ?? ''}`),
+          ...task.assumptions.map((a) => `Assumed: ${a}`),
+          open ? `${open.id}: /approve ${open.id} to build, /deny ${open.id} to cancel.` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      }
       case 'skill':
         return this.decideSkill(command.skillId, command.approved, inbound, actor);
       case 'level': {
@@ -1653,6 +1725,12 @@ export class Orchestrator {
           }
           this.setStatus(task, 'cancelled', `${a.id} denied`);
           return `${a.id} denied; ${task.id} and its subtasks are cancelled.`;
+        }
+        if (!task.children.length) {
+          // Plan then build: the build run starts now.
+          this.setStatus(task, 'ready', `${a.id} approved: build`);
+          void this.tick();
+          return `${a.id} approved. Building ${task.id}.`;
         }
         this.setStatus(task, 'running', `${a.id} approved`);
         void this.tick();
@@ -1879,6 +1957,14 @@ export class Orchestrator {
         await this.notifyApproval(task, approvalId, `${run.agent} asks (${kind}): ${summary}${args.command ? `\n$ ${args.command}` : ''}`);
         return `Recorded as ${approvalId} and sent to the owner. End your turn now; you will be resumed with the decision.`;
       }
+      case 'update_todos': {
+        const todos = Array.isArray(args.todos)
+          ? (args.todos as { text?: unknown; done?: unknown }[]).slice(0, 30).map((t) => ({ text: String(t.text ?? '').slice(0, 200), done: t.done === true })).filter((t) => t.text)
+          : [];
+        if (!todos.length) throw new Error('todos must be a non-empty list of {text, done}');
+        this.deps.store.append({ type: 'task.todos_updated', actor, taskId: task.id, runId, payload: { taskId: task.id, todos, by: run.agent } });
+        return `Checklist saved (${todos.filter((t) => t.done).length}/${todos.length} done).`;
+      }
       case 'propose_skill': {
         const name = String(args.name ?? '').trim().toLowerCase();
         const description = String(args.description ?? '').replace(/\s+/g, ' ').trim();
@@ -1906,6 +1992,102 @@ export class Orchestrator {
       }
       default:
         throw new Error(`Unknown tool ${tool}`);
+    }
+  }
+
+  // ================================================================ live browser (run token)
+
+  /** Runs that get the live browser tools: per config, ui tasks and projects with a preview by default. */
+  private wantsBrowser(task: TaskView, project: ProjectConfig): boolean {
+    const mode = this.config.browser.live;
+    return mode === 'always' || (mode === 'ui' && (task.role === 'ui' || Boolean(project.preview)));
+  }
+
+  /**
+   * Calls from the browser tools in the agent's MCP server. `before` may hold the step (paused)
+   * or refuse it (needs approval); `after` logs it with a keyframe; `frame` feeds the live view.
+   */
+  async browserCall(runId: string, op: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const run = this.state.runs.get(runId)!;
+    const task = this.state.tasks.get(run.taskId)!;
+    const project = (await this.workflow(this.project(task.projectId))).project;
+    switch (op) {
+      case 'before': {
+        if (!(await this.browserLive.waitWhilePaused(task.id, 5 * 60_000, this.now))) {
+          return { allowed: false, message: 'The owner paused the browser and has not resumed it. End your turn with a short note; you will be resumed later.' };
+        }
+        const url = String(body.url ?? '');
+        const kind = String(body.op ?? '') as Parameters<typeof needsApproval>[0];
+        if (needsApproval(kind, url, project.browserAllow)) {
+          const host = new URL(url).hostname;
+          const ok = [...this.state.approvals.values()].some((a) => a.taskId === task.id && a.status === 'approved' && a.data?.browserHost === host);
+          if (!ok) {
+            const open = [...this.state.approvals.values()].find((a) => a.taskId === task.id && a.status === 'open' && a.data?.browserHost === host);
+            const approvalId = open?.id ?? this.requestApproval(task, 'destructive', `${run.agent} wants to click and type on ${host} (not a local site)`, { browserHost: host });
+            if (!open) await this.notifyApproval(task, approvalId, `${run.agent} wants to act on ${host} in the live browser: ${String(body.label ?? kind)}. Approve to allow clicks and typing on ${host} for this task.`);
+            return { allowed: false, message: `Acting on ${host} needs the owner's approval (${approvalId}). End your turn now; you will be resumed with the decision.` };
+          }
+        }
+        return { allowed: true, notes: this.browserLive.drainNotes(task.id) };
+      }
+      case 'after': {
+        const step = task.browserSteps + 1;
+        let artifactId: string | undefined;
+        if (typeof body.keyframe === 'string' && body.keyframe) {
+          const dir = join(this.config.dataDir, 'artifacts', task.id, 'browser');
+          mkdirSync(dir, { recursive: true });
+          const path = join(dir, `${runId}-step-${step}.jpg`);
+          writeFileSync(path, Buffer.from(body.keyframe, 'base64'));
+          artifactId = nextId(this.state, 'art');
+          this.append({ type: 'artifact.saved', taskId: task.id, runId, payload: { artifactId, taskId: task.id, runId, kind: 'screenshot', path, label: `browser step ${step}: ${String(body.label ?? '')}`.slice(0, 120) } });
+        }
+        const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+        const box = body.box && typeof body.box === 'object' ? (body.box as { x: number; y: number; width: number; height: number }) : undefined;
+        const viewport = (body.viewport as { width: number; height: number }) ?? { width: 0, height: 0 };
+        const payload = {
+          taskId: task.id,
+          runId,
+          step,
+          op: String(body.op ?? ''),
+          label: String(body.label ?? '').slice(0, 200),
+          url: String(body.url ?? ''),
+          ok: body.ok !== false,
+          viewport,
+          ...(typeof body.error === 'string' && { error: body.error.slice(0, 300) }),
+          ...(typeof body.text === 'string' && { text: body.text.slice(0, 200) }),
+          ...(box && { box }),
+          ...(num(body.x) !== undefined && { x: num(body.x)! }),
+          ...(num(body.y) !== undefined && { y: num(body.y)! }),
+          ...(artifactId && { artifactId }),
+        };
+        this.append({ type: 'browser.action', taskId: task.id, runId, payload });
+        this.browserLive.publish(task.id, { type: 'action', ...payload, ts: this.now() });
+        return { ok: true };
+      }
+      case 'frame': {
+        this.browserLive.publish(task.id, { type: 'frame', jpeg: String(body.jpeg ?? ''), width: Number(body.width) || 0, height: Number(body.height) || 0, url: String(body.url ?? ''), ts: this.now() });
+        return { commands: this.browserLive.drainCommands(task.id) };
+      }
+      case 'video': {
+        const from = String(body.path ?? '');
+        if (!from.endsWith('.webm') || !existsSync(from)) return { ok: false };
+        const dir = join(this.config.dataDir, 'artifacts', task.id, 'browser');
+        mkdirSync(dir, { recursive: true });
+        const path = join(dir, `${runId}-session.webm`);
+        copyFileSync(from, path);
+        // The browser recorded into its own temp folder; remove it with the file.
+        rmSync(/hyde-browser-video-/.test(dirname(from)) ? dirname(from) : from, { recursive: true, force: true });
+        const artifactId = nextId(this.state, 'art');
+        this.append({ type: 'artifact.saved', taskId: task.id, runId, payload: { artifactId, taskId: task.id, runId, kind: 'video', path, label: `browser session (${run.agent}, ${runId})` } });
+        return { ok: true };
+      }
+      case 'preview': {
+        if (!project.preview) throw new Error(`#${project.id} has no preview command; set "preview" in the project config or WORKFLOW.md`);
+        if (!task.worktree) throw new Error('this task has no worktree yet');
+        return { url: await this.browserLive.preview(task.id, task.worktree, project.preview.command, project.preview.url) };
+      }
+      default:
+        throw new Error(`unknown browser call ${op}`);
     }
   }
 
@@ -1975,6 +2157,7 @@ export class Orchestrator {
   ): void {
     if (task.status === to && !blockedBy) return;
     if (!canTransition(task.status, to) && task.status !== to) throw new Error(`${task.id}: illegal transition ${task.status} → ${to}`);
+    if (['done', 'cancelled', 'failed', 'awaiting_merge'].includes(to)) this.browserLive.stopPreview(task.id);
     this.append({
       type: 'task.status_changed',
       taskId: task.id,

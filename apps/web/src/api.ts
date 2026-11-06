@@ -60,6 +60,7 @@ export const api = {
     call<{ text: string }>('/api/commands', { method: 'POST', body: JSON.stringify(typeof command === 'string' ? { text: command } : { command }) }),
   taskEvents: (id: string) => call<(FeedEvent & { payload: any })[]>(`/api/tasks/${id}/events`),
   diff: (id: string) => call<string>(`/api/tasks/${id}/diff`),
+  files: (id: string) => call<{ files: { path: string; added: number; removed: number }[] }>(`/api/tasks/${id}/files`),
   config: () => call<Record<string, any>>('/api/config'),
   skills: () => call<SkillsInfo>('/api/skills'),
   skill: (name: string) => call<{ name: string; source: string; dir: string; files: string[]; text: string }>(`/api/skills/${encodeURIComponent(name)}`),

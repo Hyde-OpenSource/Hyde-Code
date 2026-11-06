@@ -19,6 +19,7 @@
     "@hyde/adapter-command": "workspace:*",
     "@hyde/adapter-common": "workspace:*",
     "@hyde/adapter-opencode": "workspace:*",
+    "@hyde/browser-live": "workspace:*",
     "@hyde/core": "workspace:*",
     "@hyde/devflow": "workspace:*",
     "@hyde/gateway-discord": "workspace:*",

@@ -19,6 +19,7 @@ import { TILE_FILES, tilePath } from './tiles.ts';
 import { TERMS_URL, TERMS_VERSION, trustFolder } from './home.ts';
 import { addProject, isGitRepo, removeProject } from './projects.ts';
 import { CLIENT_COMMANDS, OWNER_ONLY_APPROVALS, type ClientName } from './clients.ts';
+import type { LiveMessage } from './live.ts';
 import type { Orchestrator } from './orchestrator.ts';
 import { buildSummary } from './summary.ts';
 import { API_VERSION, HUB_VERSION } from './version.ts';
@@ -55,6 +56,7 @@ const taskBody = z.object({
   complexity: z.enum(COMPLEXITY_LEVELS).optional(),
 });
 const levelBody = z.object({ level: z.enum(COMPLEXITY_LEVELS) });
+const liveBody = z.union([z.object({ action: z.enum(['pause', 'resume']) }), z.object({ action: z.literal('click'), x: z.number().min(0).max(10_000), y: z.number().min(0).max(10_000) })]);
 const answerBody = z.union([z.object({ text: z.string().trim().min(1).max(10_000) }), z.object({ option: z.number().int().min(0).max(9) })]);
 const decisionBody = z.object({ decision: z.enum(['approve', 'deny']) });
 
@@ -120,6 +122,20 @@ export function createApi(deps: ApiDeps): Hono {
   app.get('/api/health', (c) => c.json({ ok: true, version: HUB_VERSION, apiVersion: API_VERSION }));
 
   // ---------------------------------------------------------------- agents (run token)
+
+  // The live browser tools in the agent's MCP server (run token).
+  app.post('/api/agent/browser/:op', async (c) => {
+    const token = bearer(c.req.header('authorization'));
+    const runId = token ? orchestrator.runForToken(token) : undefined;
+    if (!runId) return c.json({ error: 'unknown or expired run token' }, 401);
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body !== 'object') return c.json({ error: 'JSON body required' }, 400);
+    try {
+      return c.json(await orchestrator.browserCall(runId, c.req.param('op') ?? '', body));
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 500);
+    }
+  });
 
   app.post('/api/agent/:tool', async (c) => {
     const tool = c.req.param('tool') ?? '';
@@ -272,6 +288,49 @@ export function createApi(deps: ApiDeps): Hono {
       off();
     }),
   );
+
+  // Live browser for the owner: frames, steps and state over SSE; pause, resume and take over.
+  app.get('/api/tasks/:id/live', owner, (c) => {
+    const id = (c.req.param('id') ?? '').toUpperCase();
+    if (!orchestrator.state.tasks.has(id)) return c.json({ error: `No task ${id}.`, code: 'not_found' }, 404);
+    return streamSSE(c, async (stream) => {
+      const queue: LiveMessage[] = [];
+      let wake: (() => void) | undefined;
+      const stop = orchestrator.browserLive.watch(id, (m) => {
+        // Keep only the newest frame when the viewer is slow.
+        if (m.type === 'frame') {
+          const i = queue.findIndex((x) => x.type === 'frame');
+          if (i !== -1) queue.splice(i, 1);
+        }
+        queue.push(m);
+        wake?.();
+      });
+      stream.onAbort(stop);
+      while (!stream.aborted) {
+        const next = queue.shift();
+        if (next) {
+          await stream.writeSSE({ event: next.type, data: JSON.stringify(next) });
+          continue;
+        }
+        await Promise.race([new Promise<void>((r) => (wake = r)), new Promise((r) => setTimeout(r, 15_000))]);
+        if (!queue.length) await stream.writeSSE({ event: 'ping', data: '' });
+      }
+      stop();
+    });
+  });
+
+  app.post('/api/tasks/:id/live', owner, async (c) => {
+    const id = (c.req.param('id') ?? '').toUpperCase();
+    if (!orchestrator.state.tasks.has(id)) return c.json({ error: `No task ${id}.`, code: 'not_found' }, 404);
+    const body = liveBody.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: 'send {"action": "pause" | "resume"} or {"action": "click", "x": 10, "y": 20}', code: 'invalid' }, 400);
+    const a = body.data;
+    if (a.action === 'click') orchestrator.browserLive.takeOver(id, a.x, a.y);
+    else orchestrator.browserLive.setPaused(id, a.action === 'pause');
+    return c.json({ ok: true, paused: orchestrator.browserLive.isPaused(id) });
+  });
+
+  app.get('/api/tasks/:id/files', ownerOrClient, async (c) => c.json({ files: await orchestrator.filesTouched((c.req.param('id') ?? '').toUpperCase()) }));
 
   app.get('/api/tasks/:id/events', ownerOrClient, (c) => c.json(store.list({ taskId: c.req.param('id') ?? '' })));
 

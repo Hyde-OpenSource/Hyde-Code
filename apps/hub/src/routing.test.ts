@@ -94,7 +94,7 @@ describe('router by mode and tier', () => {
     ({ profiles: () => profiles, profile: (n: string) => profiles.find((p) => p.name === n), usable: () => true, vendor: (n: string) => vendors[n] }) as unknown as AgentPool;
   const configOf = (mode: string, effort = 'balanced') =>
     ({ quotaSoftCeiling: 0.8, review: { crossVendor: true }, routing: { mode, effort, classifier: true } }) as unknown as HubConfig;
-  const project = { id: 'demo', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [] };
+  const project = { id: 'demo', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [], browserAllow: [] };
   const taskAt = (level: string, extra: object = {}) =>
     ({ id: 'T-1', dependsOn: [], writeScope: [], complexity: { level, by: 'rules', reason: '', confident: true, seq: 1 }, ...extra }) as never;
   const all = poolOf([claude, codex, opencode]);

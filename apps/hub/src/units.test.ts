@@ -128,7 +128,7 @@ describe('workflow', () => {
     const { settings, template } = parseWorkflow(text);
     expect(settings.checks).toEqual(['npm test']);
     expect(template).toBe('You are working on {{ task.title }} in {{ project.name }}.');
-    const project = { id: 'x', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [] };
+    const project = { id: 'x', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [], browserAllow: [] };
     const w = applyWorkflow(project, text);
     expect(w.project).toMatchObject({ checks: ['npm test'], agents: ['codex-1'], preview: { command: 'npm run dev -- --port $PORT', url: 'http://127.0.0.1:$PORT', paths: ['/'] } });
     expect(applyWorkflow({ ...project, checks: ['make'] }, text).project.checks).toEqual(['make']);
@@ -177,7 +177,7 @@ describe('router', () => {
     vendor: (n: string) => vendors[n],
   } as unknown as AgentPool;
   const config = { quotaSoftCeiling: 0.8, review: { crossVendor: true }, routing: { mode: 'balanced', effort: 'balanced', classifier: true } } as never;
-  const project = { id: 'demo', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [] };
+  const project = { id: 'demo', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [], browserAllow: [] };
   const task = { id: 'T-1', role: 'ui', dependsOn: [], writeScope: [] } as never;
 
   it('prefers role fit, respects quota and concurrency, and picks a different vendor to review', () => {

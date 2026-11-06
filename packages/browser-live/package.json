@@ -1,0 +1,8 @@
+{
+  "name": "@hyde/browser-live",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@modelcontextprotocol/sdk": "1.32.1", "playwright": "1.64.0", "zod": "4.6.6" }
+}

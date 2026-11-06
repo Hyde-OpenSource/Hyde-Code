@@ -69,6 +69,8 @@ const projectSchema = z.object({
       paths: z.array(z.string()).default(['/']),
     })
     .optional(),
+  /** Hosts the live browser may click and type on without asking (local hosts never ask). */
+  browserAllow: z.array(z.string()).default([]),
   /** Restrict which agents may work here. */
   agents: z.array(z.string()).optional(),
   protectedBranches: z.array(z.string()).optional(),
@@ -127,7 +129,14 @@ const configSchema = z.object({
       crossVendor: z.boolean().default(true),
     })
     .default({ enabled: false, rounds: 2, crossVendor: true }),
-  browser: z.object({ enabled: z.boolean().default(false), video: z.boolean().default(false) }).default({ enabled: false, video: false }),
+  browser: z
+    .object({
+      enabled: z.boolean().default(false),
+      video: z.boolean().default(false),
+      /** Give runs the live browser tools: always, or only tasks with the ui role or a project preview. */
+      live: z.enum(['off', 'ui', 'always']).default('ui'),
+    })
+    .default({ enabled: false, video: false, live: 'ui' }),
   merge: z
     .object({
       /** gh pr merge strategy. */

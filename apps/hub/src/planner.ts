@@ -33,8 +33,9 @@ export const PLAN_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['key', 'title', 'spec', 'doneWhen', 'writeScope', 'role', 'dependsOn', 'size', 'complexity', 'skills'],
+        required: ['key', 'title', 'spec', 'doneWhen', 'writeScope', 'role', 'dependsOn', 'size', 'complexity', 'skills', 'steps'],
         properties: {
+          steps: { type: 'array', items: { type: 'string' } },
           skills: { type: 'array', items: { type: 'string' } },
           complexity: { type: 'string', enum: LEVELS },
           key: { type: 'string' },
@@ -71,6 +72,7 @@ const planSchema = z.object({
         size: z.enum(['S', 'M', 'L']).default('M'),
         complexity: z.enum(LEVELS).optional(),
         skills: z.array(z.string()).optional(),
+        steps: z.array(z.string()).default([]),
       }),
     )
     .default([]),
@@ -127,6 +129,7 @@ export function plannerPrompt(input: PlannerInput): string {
     '- Every task needs a self-contained spec written for the agent that will do it: the exact files to change, the steps, and the commands that prove it works. Cheap models will run trivial and low tasks, so be concrete; never say "see above".',
     '- Every task also needs a testable doneWhen, a writeScope (glob patterns of files it may change), a role (implement, ui for browser-facing work, bulk for mechanical changes), dependsOn (keys of tasks that must finish first) and its own complexity.',
     '- size L means more than a day of work; avoid it by splitting.',
+    '- steps: 2 to 8 short checklist items for the agent (the owner sees them as a live todo list), ending with verification.',
     input.skills?.length
       ? '- skills: for each task, the names of the skills below that would help its agent (an empty list when none fits). Available skills:\n' +
         input.skills.map((s) => `  - ${s.name}: ${s.description}`).join('\n')

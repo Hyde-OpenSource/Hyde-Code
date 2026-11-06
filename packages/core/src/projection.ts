@@ -37,6 +37,12 @@ export interface TaskView {
   assumptions: string[];
   /** Skills chosen for this task; undefined means every enabled skill. */
   skills?: string[];
+  /** Steps taken in the live browser. */
+  browserSteps: number;
+  /** The checklist the owner sees live. */
+  todos: { text: string; done: boolean }[];
+  /** Plan-then-build override; undefined means the default (on for high complexity). */
+  planGate?: boolean;
   /** Agent profile that owns the worktree. */
   agent?: string;
   /** Seq of the latest workspace assignment (runs after it belong to the current agent). */
@@ -243,6 +249,8 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         complexityHistory: [],
         assumptions: [],
         leftAgents: [],
+        browserSteps: 0,
+        todos: [],
         reviews: [],
         artifactIds: [],
         statusHistory: [],
@@ -289,6 +297,21 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
       const { level, by, reason, confident } = record.payload;
       task.complexity = { level, by, reason, confident, seq: record.seq };
       task.complexityHistory.push({ level, by, reason, seq: record.seq });
+      break;
+    }
+    case 'task.todos_updated': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.todos = record.payload.todos;
+      break;
+    }
+    case 'task.plan_gate_set': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.planGate = record.payload.on;
+      break;
+    }
+    case 'browser.action': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.browserSteps = Math.max(task.browserSteps, record.payload.step);
       break;
     }
     case 'task.skills_set': {

@@ -18,6 +18,33 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-11-06: Live activity: todos, plan then build, files touched (T-009)
+- **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **What:** New MCP tool `update_todos` (the full checklist with done flags; `task.todos_updated` event). The planner returns 2-8 `steps` per subtask, which seed each subtask's checklist; a parent's checklist lists its subtasks. The task packet shows the checklist and tells agents to keep it current. Plan then build: after planning, a task whose gate is on waits for a `plan` approval before the build run (on by default for high complexity). `/plan T-n on|off` and a button on the task page change it (`task.plan_gate_set`), and `/plan T-n` shows the plan. `/todos T-n` lists the checklist. `GET /api/tasks/:id/files` returns the files changed on the task branch with +/− counts. The task page has a Checklist card and a Files touched card, and the runs table shows cost. The timeline describes checklist, gate and browser events, and the shared feed (office and TUI) shows browser steps, levels and the model on dispatch.
+- **Why:** docs/roadmap-v2.md section 4.
+- **Files:** packages/core/src/{events,projection,chat,commands,office}.ts, packages/mcp-harness/src/{server,mcp.test}.ts, packages/devflow/src/index.ts, apps/hub/src/{orchestrator,planner,http,todos.test,tiers.test}.ts, apps/web/src/{api.ts,styles.css,pages/TaskPage.tsx}
+- **Verified:** `pnpm test` 217/217. New tests: the planner seeds the checklist, the agent ticks it, the packet and `/todos` show it, empty updates are refused; files touched counts staged changes; high work waits for the plan approval and builds after it; `/plan off` skips the gate. A real OpenCode (glm-5.3-flash-free) run on a scratch repo kept a 5-item checklist with update_todos and touched 3 files (+1/−1, +3, +3). Playwright screenshots of the Checklist and Files touched cards at 1440 and 390 px look right.
+- **Open / follow-ups:** Shell command output in the timeline is still the tool summary (the CLIs don't stream full output into the event log); thinking summaries are not shown.
+
+### 2026-11-06: Live browser feed with cursor and click overlay (T-008)
+- **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **What:** New `packages/browser-live`: a Playwright session (Hyde's own headless Chromium, never the owner's profile) driven by browser tools in the hyde MCP server (`browser_preview`, `browser_open` with a desktop or phone device, `browser_snapshot` with element refs e1…, `browser_click`, `browser_fill`, `browser_press`, `browser_scroll`, `browser_back`, `browser_close`). They are registered in the existing `hyde` server when a run has `HYDE_BROWSER=1`, so every adapter gets them without new MCP wiring. That is a deviation from the roadmap's separate "hyde-browser" server. Playwright loads only for those runs. Each step asks the hub first: the hub holds the step while the owner has paused, and asks for approval (once per host and task) before clicks or typing on a non-local site not listed in the project's new `browserAllow`. After the step it reports the target box, pointer position, masked typed text and a JPEG keyframe; the hub logs a `browser.action` event and saves the keyframe as a screenshot artifact. CDP `Page.startScreencast` frames (~5 fps) go to an in-memory live channel (`apps/hub/src/live.ts`) and never into the event log. The owner watches over SSE (`GET /api/tasks/:id/live`) and controls with `POST /api/tasks/:id/live` (pause, resume, click to take over; the agent is told before its next step). When the browser closes, the session video is saved as a video artifact. `browser_preview` starts the project's preview command in the task's worktree on a free port and stops it when the task leaves the active states. Dashboard: a Live browser card on the task page with the frame, an arrow cursor gliding to each action, click ripple, element box, caption, Paused badge, a step timeline with keyframe thumbnails (click to inspect), and Preview, Pause/Resume, Take over and Stop. Config `browser.live`: off, ui (default: ui tasks and projects with a preview), always.
+- **Why:** docs/roadmap-v2.md section 3; the owner asked for a live browser like Codex and Cline show.
+- **Files:** packages/browser-live/** (new), packages/mcp-harness/{package.json,src/main.ts}, packages/core/src/{events,projection,office}.ts, apps/hub/src/{live,live.test,orchestrator,http,config,browser}.ts, apps/hub/package.json, apps/hub/src/{routing,units}.test.ts, apps/web/src/{styles.css,pages/LiveBrowser.tsx,pages/TaskPage.tsx}
+- **Verified:** `pnpm typecheck` clean, `pnpm test` 214 at this point. New tests:
+  - A real headless Chromium session against a local page: refs, a click with box and pointer, a masked password, a held step, owner notes, screencast frames, a .webm video.
+  - Hub: logged steps with keyframe artifacts, approval for a non-local host asked once, paused steps, take-over commands and notes, owner-only live controls, run-token-only browser calls.
+
+  Real run on a scratch login app (preview `node server.js`), OpenCode with a free model:
+  - The run first hung with `opencode/big-pickle`. OpenCode's own log showed the model answering "[overloaded] the server is overloaded" and OpenCode retrying silently; nothing was wrong on the Hyde side.
+  - With `opencode/glm-5.3-flash-free` the agent started the preview, opened it, filled user and password (shown masked) and clicked Sign in. The page then said "Hello, ada!", and the agent wrote that greeting into docs/CHECK.md.
+  - Four steps were logged with keyframes, plus a session video. The preview server stopped when the task reached awaiting_merge.
+  - Playwright screenshots of the live view at 1440 px (cursor on "Sign in", masked password) and 390 px (caption, step thumbnails, proof of work) look right.
+- **Cleanup:** scratch hubs stopped; scratch repos, homes, recordings and screenshots deleted.
+- **Open / follow-ups:** The office monitor thumbnail and a TUI browser view are not built (the TUI and the feed show the steps as text). There is no GIF of keyframes (it would need an encoder dependency; the video and keyframes are attached). Take-over is click only (no typing). Silent model overload in OpenCode is caught only by the 15-minute stall timeout.
+
 ### 2026-11-06: Apply the owner's answers Q-001..Q-004 (Codex tiers)
 - **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
 - **Branch:** agent-hyde-autonomy/feature/smart-routing

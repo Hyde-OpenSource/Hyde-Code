@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { sourceLabel } from '@hyde/core/office';
 import { ago, api } from '../api.ts';
 import { CommandButton, Status, type PageProps } from '../ui.tsx';
+import { LiveBrowser } from './LiveBrowser.tsx';
 
 type EventRow = Awaited<ReturnType<typeof api.taskEvents>>[number];
 
@@ -27,6 +28,12 @@ function describe(e: EventRow): string {
       return `complexity ${p.level} (${p.by}${p.confident === false ? ', a guess' : ''}): ${p.reason}`;
     case 'task.waiting':
       return `waiting: ${p.reason}`;
+    case 'task.todos_updated':
+      return `checklist (${p.by}): ${(p.todos ?? []).filter((t: { done: boolean }) => t.done).length}/${(p.todos ?? []).length} done`;
+    case 'task.plan_gate_set':
+      return `plan then build ${p.on ? 'on' : 'off'} (${p.by})`;
+    case 'browser.action':
+      return `browser step ${p.step}: ${p.label}${p.text ? ` "${p.text}"` : ''}${p.ok ? '' : ` (failed: ${p.error ?? ''})`}`;
     case 'question.matched':
       return `${p.by} asked again (${p.status === 'answered' ? 'answered from memory' : 'linked'}) as ${p.questionId}: ${p.text}`;
     case 'question.asked':
@@ -89,6 +96,60 @@ function Complexity({ task, refresh, notify }: { task: PageProps['state']['tasks
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The live checklist and the files the task has changed so far. */
+function Work({ task, lastSeq, refresh, notify }: { task: PageProps['state']['tasks'][number]; lastSeq: number } & Pick<PageProps, 'refresh' | 'notify'>) {
+  const [files, setFiles] = useState<{ path: string; added: number; removed: number }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    if (task.worktree) api.files(task.id).then((r) => alive && setFiles(r.files), () => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [task.id, task.worktree, lastSeq]);
+  const done = task.todos.filter((t) => t.done).length;
+  const gate = task.planGate ?? task.complexity?.level === 'high';
+  if (!task.todos.length && !files.length) return null;
+  return (
+    <div className="grid work">
+      <div className="card stack">
+        <div className="spread">
+          <strong>Checklist {task.todos.length ? `(${done}/${task.todos.length})` : ''}</strong>
+          <CommandButton command={{ kind: 'plan', taskId: task.id, on: !gate }} label={gate ? 'Plan then build: on' : 'Plan then build: off'} refresh={refresh} notify={notify} />
+        </div>
+        {task.todos.length ? (
+          <ul className="todos">
+            {task.todos.map((t, i) => (
+              <li key={i} className={t.done ? 'done' : ''}>
+                <span aria-hidden="true">{t.done ? '☑' : '☐'}</span> {t.text}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="meta">No checklist yet.</div>
+        )}
+      </div>
+      <div className="card stack">
+        <strong>Files touched ({files.length})</strong>
+        {files.length ? (
+          <table className="files">
+            <tbody>
+              {files.map((f) => (
+                <tr key={f.path}>
+                  <td className="mono">{f.path}</td>
+                  <td className="add">+{f.added}</td>
+                  <td className="del">−{f.removed}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="meta">Nothing changed yet.</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -161,6 +222,16 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
       </div>
 
       <Complexity task={task} refresh={refresh} notify={notify} />
+
+      <Work task={task} lastSeq={state.lastSeq} refresh={refresh} notify={notify} />
+
+      <LiveBrowser
+        taskId={task.id}
+        steps={events.filter((e) => e.type === 'browser.action').map((e) => e.payload)}
+        running={runs.some((r) => r.state === 'running')}
+        refresh={refresh}
+        notify={notify}
+      />
 
       <div className="grid">
         <div className="card stack">
@@ -292,6 +363,7 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
                   <td>{r.state === 'running' ? <span className="badge accent">running</span> : r.failure ? <span className="badge bad">{r.failure.reason}</span> : <span className="badge ok">done</span>}</td>
                   <td className="meta">
                     {r.inputTokens.toLocaleString()} / {r.outputTokens.toLocaleString()}
+                    {r.costUsd > 0 && <div>${r.costUsd.toFixed(3)}</div>}
                   </td>
                   <td className="meta">{ago(r.startedTs)}</td>
                 </tr>

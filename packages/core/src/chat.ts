@@ -18,6 +18,8 @@ export type Command =
   | { kind: 'level'; taskId: string; level: Complexity }
   | { kind: 'skills'; taskId?: string; add: string[]; remove: string[] }
   | { kind: 'skill'; skillId: string; approved: boolean }
+  | { kind: 'todos'; taskId: string }
+  | { kind: 'plan'; taskId: string; on?: boolean }
   | { kind: 'lesson'; lessonId: string; approved: boolean }
   | { kind: 'help' };
 
@@ -58,4 +60,4 @@ export interface ChatGateway {
 }
 
 /** The harness MCP tools agents may call through POST /api/agent/:tool. */
-export const TOOLS_NAMES = ['ask_question', 'report_progress', 'complete_task', 'request_approval', 'propose_lesson', 'propose_skill'] as const;
+export const TOOLS_NAMES = ['ask_question', 'report_progress', 'complete_task', 'request_approval', 'propose_lesson', 'propose_skill', 'update_todos'] as const;

@@ -114,11 +114,12 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO (start after T-006)
+- **Status:** DONE (office thumbnail, TUI view, GIF and typing take-over not built)
 - **Priority:** medium
 - **Files / area:** packages/browser-live (new), apps/hub/src/browser.ts, http.ts, orchestrator.ts, apps/web (task page, office)
 - **Done when:** docs/roadmap-v2.md section 3 is built: hyde-browser MCP server, CDP screencast frames on a live channel, an overlay drawn in the dashboard (arrow cursor, ripple, element box, caption, step timeline), pause/take over/stop, recordings saved as artifacts, preview server per worktree, approval for side effects on non-local sites. Verified with a real agent run on a scratch web app plus Playwright screenshots at 1440 and 390 px.
 - **Notes:**
+  - 2026-11-06: Live browser built and run for real with OpenCode (glm-5.3-flash-free) on a scratch app; see progress.md.
   - 2026-11-06 02:39 IST (agent-hyde-autonomy): applied Q-001..Q-004 (114fd77), then checked quota before starting T-008: Claude 5-hour window 94% (over the 80% limit), 7-day 82%. Stopped without starting T-008. Resume with the next step below once the 5-hour window is under 80% and the 7-day window under 90%.
   - 2026-11-06 (agent-hyde-autonomy, stopped before starting: Claude 5-hour window at 68%, T-007 just committed as bcdcdd4). Exact next step: create `packages/browser-live` with a stdio MCP server `hyde-browser` (Playwright 1.x, the one `apps/hub/src/browser.ts` already uses, own Chromium profile) whose tools POST every action to a new hub route `/api/agent/browser` (same per-run token as mcp-harness). Then add it to the run's MCP config next to `hyde` in `orchestrator.dispatch`, and stream `Page.startScreencast` frames on a separate SSE route (`/api/tasks/:id/live`), not the event log. Real runs can use OpenCode's free model to save Claude quota.
 
@@ -127,11 +128,12 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO (start after T-006)
+- **Status:** DONE (full shell output and thinking summaries not in the timeline)
 - **Priority:** medium
 - **Files / area:** apps/hub/**, packages/mcp-harness/**, packages/core/**, apps/web, apps/hub/src/tui*.ts
 - **Done when:** docs/roadmap-v2.md section 4 is built: one timeline per task (tool calls, commands, diffs, model/tier, tokens/cost), update_todos MCP tool shown live, optional plan-then-build with owner approval (default on for high complexity), files-touched list. Tests and screenshots.
 - **Notes:**
+  - 2026-11-06: Todos, plan then build, files touched; real OpenCode run plus screenshots.
 
 ## T-010: Diff comments, checkpoints, commands, export
 - **Assigned to:** agent-hyde-autonomy
@@ -164,6 +166,39 @@
 - **Priority:** medium
 - **Files / area:** packages/gateways/telegram/**, packages/core (commands), apps/hub/**
 - **Done when:** docs/roadmap-v2.md section 7 is built: token-once pairing with a t.me start link, one edited live message per task, /live with cursor-annotated frames, /mode /effort /tier /skills /plan /diff /undo /todos /memory, merged duplicate questions. Unit tests with grammY fakes; a live test only if the owner gives a test bot token (ask main).
+- **Notes:**
+
+## T-013: Hyde AI Suite: one Tauri desktop app
+- **Assigned to:** agent-hyde-autonomy
+- **Assigned by / date:** main on 2026-11-06
+- **Repeats:** once
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **Status:** TODO (start after T-012)
+- **Priority:** high
+- **Files / area:** apps/suite (new Tauri 2 shell), apps/desktop/**, apps/web/**, apps/hub/src/{main,home,cli}.ts, scripts/**, README.md, docs/HYDE_AI.md
+- **Done when:** The owner chose: one native window built with Tauri, 'like the Claude desktop app': a left sidebar (projects and chats), and inside one window: Assistant (Hyde Agent chat, voice and desktop commands), Code (Hyde Code office, board, inbox, task pages with the live browser feed, skills), Usage and Settings. Opening the app starts the hub inside it (no separate `hyde hub start`; if a hub is already running, it attaches instead); closing the window leaves the hub running only if a setting says so. One sign-in path: the app reads the client token itself, so the owner never pastes tokens. The `hyde` and `hyde-ai` terminal commands keep working. Reuse the existing web dashboard and assistant UI as the window's pages instead of rewriting them. Tauri versions pinned exactly and at least two weeks old; ask main before adding any other dependency. Fedora build packages (webkit2gtk4.1-devel, libsoup3-devel) are missing: ask main, which asks the owner to install them; do not run sudo. Verified by running the app on this machine with screenshots of each page at full and narrow window sizes, the hub starting from the app, and an existing hub being reused.
+- **Notes:**
+
+## T-014: Installer packages
+- **Assigned to:** agent-hyde-autonomy
+- **Assigned by / date:** main on 2026-11-06
+- **Repeats:** once
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **Status:** TODO (start after T-012)
+- **Priority:** high
+- **Files / area:** apps/suite/**, scripts/**, .github/workflows/ci.yml, README.md
+- **Done when:** An AppImage and an .rpm for the suite, with an app-menu icon. Installing puts `hyde` and `hyde-ai` on PATH, and uninstalling removes everything except the owner's data in ~/.hyde and ~/.config/hyde-ai. CI builds both packages (no publishing). Verified by installing the .rpm and the AppImage locally (ask main before any step that needs sudo) and opening the app from the app menu.
+- **Notes:**
+
+## T-015: One project folder: HYDE AUTONOMY
+- **Assigned to:** agent-hyde-autonomy
+- **Assigned by / date:** main on 2026-11-06
+- **Repeats:** once
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **Status:** TODO (start after T-012)
+- **Priority:** high
+- **Files / area:** context.md, README.md, CLAUDE.md, docs/**
+- **Done when:** The owner decided /mnt/NewVolume/D/PROJECTS/HYDE AUTONOMY is the single Hyde AI project folder (Hyde Code hub + Hyde Agent desktop + suite app). Update context.md section 1 and the folder map, README (one product, 'Hyde AI Suite'), and docs to say so, and list the outside branches: demo task branches (codex-1/t-3, opencode-1/t-4, t-5, t-6) and origin/staging (11 commits, the merged PRs), which get merged in when the PR to staging is opened. Do not delete worktrees, folders or branches: list what can be removed and main asks the owner.
 - **Notes:**
 
 ## Done

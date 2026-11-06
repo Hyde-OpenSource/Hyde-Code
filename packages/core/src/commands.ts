@@ -49,6 +49,15 @@ export function parseCommand(text: string): Command | null {
       const id = taskArg();
       return id ? { kind: 'retry', taskId: id } : { kind: 'help' };
     }
+    case 'todos': {
+      const id = taskArg();
+      return id ? { kind: 'todos', taskId: id } : { kind: 'help' };
+    }
+    case 'plan': {
+      // /plan T-3 (show it), /plan T-3 on|off (plan then build: wait for my approval before coding)
+      const m = /^(T-\d+)(?:\s+(on|off))?$/i.exec(rest);
+      return m ? { kind: 'plan', taskId: m[1]!.toUpperCase(), ...(m[2] && { on: m[2].toLowerCase() === 'on' }) } : { kind: 'help' };
+    }
     case 'skills': {
       // /skills (list), /skills T-3 +browser -hyde-verify (change a task's skills)
       if (!rest) return { kind: 'skills', add: [], remove: [] };
@@ -106,6 +115,7 @@ export const HELP_TEXT = [
   '/answer Q-2 <text>: answer a question (or tap a button, or reply to the question)',
   '/approve A-1, /deny A-1: decide an approval (also L-1 for lessons, S-1 for proposed skills)',
   '/skills: list skills; /skills T-3 +name -name: change the skills a task gets',
+  '/todos T-3: the task checklist; /plan T-3 (show the plan), /plan T-3 on|off (approve the plan before coding)',
   '/merge T-3: merge a finished task into its base branch (staging)',
   '/promote #project: open and merge staging → main (asks you to confirm)',
   '/projects: registered projects',

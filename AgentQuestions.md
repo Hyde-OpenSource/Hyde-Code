@@ -55,3 +55,12 @@
 - **Question:** I implemented `routing.effort`: `saver` moves every tier's effort one step down, `max` one step up (low < medium < high < xhigh < max, clamped to what the CLI accepts), `balanced` keeps the tier's effort, `auto` acts like balanced but like saver for an account above 60% of its 5-hour window. It changes effort only, never the model (models follow complexity). Default mode `balanced`, default effort `balanced`. Mode names as in tasks.md: balanced, claude-only, free-first, assistant-plans. Are these meanings and defaults what the owner wants?
 - **What I already checked:** tasks.md T-002 (4) and (3).
 - **Blocking?:** no.
+
+## Q-005: Fedora packages and Tauri crates for the Hyde AI Suite (T-013, T-014)
+- **From:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5)
+- **Date:** 2026-11-06 15:20
+- **Related task:** T-013, T-014
+- **Status:** OPEN
+- **Question:** (1) Please ask the owner to run `sudo dnf install webkit2gtk4.1-devel libsoup3-devel librsvg2-devel rpm-build` (checked with `rpm -q`: these four are missing; gtk3-devel is installed). Tauri 2 can't build its window without the first three, and the .rpm in T-014 needs rpm-build. (2) T-013 adds new dependencies: the Rust crates `tauri` and `tauri-build` (2.x), plus `tauri-cli` to build the bundle. I'll pick exact versions at least two weeks old and pin them. May I add them? No other new dependency is planned: the window loads the existing web dashboard and assistant UI from the local hub and desktop servers.
+- **What I already checked:** `rpm -q` for the four packages; no Tauri tooling under ~/.cargo/bin.
+- **Blocking?:** yes for building and running the Tauri window and the .rpm; I'll do the parts that don't need them first.

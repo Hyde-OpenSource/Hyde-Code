@@ -74,7 +74,12 @@ export function buildTaskPacket(input: PacketInput): string {
     '- When done, call `complete_task` with a summary, how you verified it, and the files you changed.',
     '- Need the owner to approve something (a new dependency, a scope change, a destructive step)? Call `request_approval` and end your turn.',
     '- Learned something future agents should know? Call `propose_lesson`.',
+    '- Keep your checklist current with `update_todos` (the owner watches it live): at the start, after each step, and before `complete_task`.',
   ];
+  if (task.todos?.length) {
+    lines.push('', '## Checklist (from the plan; keep it updated with update_todos)');
+    for (const t of task.todos) lines.push(`- [${t.done ? 'x' : ' '}] ${t.text}`);
+  }
   if (input.skills?.length) {
     lines.push('', '## Skills for this task', 'Your CLI has these skills installed for this run. Use one when its description fits:');
     for (const s of input.skills) lines.push(`- **${s.name}**: ${s.description}`);

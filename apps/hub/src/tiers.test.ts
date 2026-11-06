@@ -19,7 +19,11 @@ describe('complexity tiers in the orchestrator', () => {
     h = await makeHarness({ agents: [{ name: 'claude-1', vendor: 'anthropic', turns: [answer(plan()), doWork()] }], config: { planner: { enabled: true } } });
     const reply = await h.o.handle(h.inbound({ kind: 'new', text: 'Add a hello file' }));
     expect(reply).toMatch(/Complexity: medium: feature or fix/);
-    await h.until(() => h.o.state.approvals.has('A-1'), 'done');
+    // High complexity: plan then build waits for the owner's approval of the plan first.
+    await h.until(() => h.o.state.approvals.get('A-1')?.kind === 'plan', 'plan approval');
+    expect(h.o.state.tasks.get('T-1')!.status).toBe('blocked');
+    expect(await h.o.handle(h.inbound({ kind: 'decide', approvalId: 'A-1', approved: true }))).toBe('A-1 approved. Building T-1.');
+    await h.until(() => h.o.state.approvals.has('A-2'), 'done');
     const task = h.o.state.tasks.get('T-1')!;
     expect(task.complexityHistory.map((c) => `${c.by}:${c.level}`)).toEqual(['rules:medium', 'planner:high']);
     const calls = h.adapters['claude-1']!.calls;

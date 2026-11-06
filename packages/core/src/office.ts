@@ -105,7 +105,7 @@ export function describeEvent(e: FeedEvent): string | null {
     case 'task.planned':
       return p.children?.length > 1 ? `${t} split into ${p.children.length} tasks` : `${t} planned`;
     case 'run.dispatched':
-      return `${p.agent} picked up ${t} (${String(p.mode).replace('_', ' ')})`;
+      return `${p.agent} picked up ${t} (${String(p.mode).replace('_', ' ')}${p.model ? `, ${p.model}` : ''})`;
     case 'question.asked':
       return `${t} asks: ${p.text}`;
     case 'question.answered':
@@ -132,6 +132,10 @@ export function describeEvent(e: FeedEvent): string | null {
       return `${p.by} proposes a lesson: ${p.text}`;
     case 'agent.progress':
       return `${t}: ${p.message}`;
+    case 'browser.action':
+      return `${t} browser ${p.step}: ${p.label}${p.ok === false ? ' (failed)' : ''}`;
+    case 'task.classified':
+      return `${t} is ${p.level} (${p.by})`;
     case 'node.connected':
       return `Worker ${p.nodeId} connected from ${p.host}`;
     case 'node.disconnected':
