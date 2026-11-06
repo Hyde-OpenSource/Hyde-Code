@@ -1,14 +1,22 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import type { AgentProfile } from '@hyde/core';
+import { COMPLEXITY_LEVELS, EFFORT_LEVELS, HYDE_EFFORTS, ROUTING_MODES, type AgentProfile } from '@hyde/core';
 import { z } from 'zod';
+import { homePaths } from './home.ts';
 
 // hyde.config.json holds non-secret settings; secrets come only from the environment (.env).
 // Everything is optional except one project and one enabled agent: the owner picks which CLIs,
-// gateways and stages to use (`pnpm hyde setup`, or Settings in the dashboard).
+// gateways and stages to use (`hyde setup`, or Settings in the dashboard).
 
 const ROLES = ['plan', 'implement', 'review', 'ui', 'bulk', 'triage'] as const;
+
+const tierSchema = z.object({
+  model: z.string().optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+  /** Marks a free model (OpenCode's opencode/* models are free by default). */
+  free: z.boolean().optional(),
+});
 
 const agentSchema = z.object({
   name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
@@ -16,7 +24,13 @@ const agentSchema = z.object({
   adapter: z.string().min(1),
   enabled: z.boolean().default(true),
   model: z.string().optional(),
-  effort: z.enum(['low', 'medium', 'high']).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+  /**
+   * Model and effort per complexity level, e.g. { "high": { "model": "opus", "effort": "high" } }.
+   * A level without an entry uses the next stronger one. Without `tiers`, claude-code uses
+   * opus/sonnet/haiku and other adapters use `model` for every level.
+   */
+  tiers: z.partialRecord(z.enum(COMPLEXITY_LEVELS), tierSchema).optional(),
   roles: z.array(z.string()).default(['plan', 'implement', 'review', 'ui']),
   maxConcurrent: z.number().int().min(1).max(5).default(1),
   account: z.string().optional(),
@@ -55,6 +69,8 @@ const projectSchema = z.object({
       paths: z.array(z.string()).default(['/']),
     })
     .optional(),
+  /** Hosts the live browser may click and type on without asking (local hosts never ask). */
+  browserAllow: z.array(z.string()).default([]),
   /** Restrict which agents may work here. */
   agents: z.array(z.string()).optional(),
   protectedBranches: z.array(z.string()).optional(),
@@ -82,7 +98,8 @@ const configSchema = z.object({
   quotaSoftCeiling: z.number().min(0).max(1).default(0.8),
   stallTimeoutMinutes: z.number().positive().default(15),
   maxAttempts: z.number().int().min(1).default(3),
-  maxContinuations: z.number().int().min(0).default(2),
+  /** Nudges after a turn that ended without complete_task, before the task moves to another agent or tier. */
+  maxContinuations: z.number().int().min(0).default(1),
   maxFixRounds: z.number().int().min(0).default(3),
   checkTimeoutMinutes: z.number().positive().default(10),
   planner: z
@@ -90,8 +107,20 @@ const configSchema = z.object({
       enabled: z.boolean().default(false),
       /** Plans with more subtasks than this, or any size L task, wait for the owner's approval. */
       approvalOver: z.number().int().min(1).default(3),
+      /** Most questions one plan may ask; the planner states assumptions for everything else. */
+      maxQuestions: z.number().int().min(0).max(10).default(3),
     })
-    .default({ enabled: false, approvalOver: 3 }),
+    .default({ enabled: false, approvalOver: 3, maxQuestions: 3 }),
+  routing: z
+    .object({
+      /** balanced, claude-only, free-first or assistant-plans (docs: README "Tiers, modes and effort"). */
+      mode: z.enum(ROUTING_MODES).default('balanced'),
+      /** Hub-wide effort: saver, balanced, max or auto. */
+      effort: z.enum(HYDE_EFFORTS).default('balanced'),
+      /** Ask a cheap model when the rules can't tell a task's complexity (and no planner runs). */
+      classifier: z.boolean().default(true),
+    })
+    .default({ mode: 'balanced', effort: 'balanced', classifier: true }),
   review: z
     .object({
       enabled: z.boolean().default(false),
@@ -100,7 +129,14 @@ const configSchema = z.object({
       crossVendor: z.boolean().default(true),
     })
     .default({ enabled: false, rounds: 2, crossVendor: true }),
-  browser: z.object({ enabled: z.boolean().default(false), video: z.boolean().default(false) }).default({ enabled: false, video: false }),
+  browser: z
+    .object({
+      enabled: z.boolean().default(false),
+      video: z.boolean().default(false),
+      /** Give runs the live browser tools: always, or only tasks with the ui role or a project preview. */
+      live: z.enum(['off', 'ui', 'always']).default('ui'),
+    })
+    .default({ enabled: false, video: false, live: 'ui' }),
   merge: z
     .object({
       /** gh pr merge strategy. */
@@ -142,6 +178,14 @@ const configSchema = z.object({
       publicUrl: z.string().url().optional(),
     })
     .default({ enabled: false }),
+  skills: z
+    .object({
+      /** Skill names never given to agents. */
+      disabled: z.array(z.string()).default([]),
+      /** Extra folders of skills (each skill in its own sub-folder with a SKILL.md), e.g. a devflow-skills clone. */
+      folders: z.array(z.string()).default([]),
+    })
+    .default({ disabled: [], folders: [] }),
   /** Plugin modules exporting `register(registries)`. */
   plugins: z.array(z.string()).default([]),
   projects: z.array(projectSchema).min(1),
@@ -240,12 +284,17 @@ export function parseConfig(raw: unknown, configFile: string, env: NodeJS.Proces
   };
 }
 
-/** Loads hyde.config.json and secrets from the environment, creating the data dir. */
-export function loadConfig(path = process.env.HYDE_CONFIG ?? 'hyde.config.json'): HubConfig {
+/** Where the config lives: $HYDE_CONFIG, else ~/.hyde/config.json. */
+export function configPath(): string {
   // pnpm runs scripts inside apps/hub; INIT_CWD is where the command was typed.
-  const file = resolve(process.env.INIT_CWD ?? process.cwd(), path);
+  return process.env.HYDE_CONFIG ? resolve(process.env.INIT_CWD ?? process.cwd(), process.env.HYDE_CONFIG) : homePaths().config;
+}
+
+/** Loads the config and secrets from the environment, creating the data dir. */
+export function loadConfig(path = configPath()): HubConfig {
+  const file = resolve(path);
   if (!existsSync(file)) {
-    throw new Error(`Config not found: ${file}. Run \`pnpm hyde setup\`, or copy hyde.config.example.json to hyde.config.json.`);
+    throw new Error(`Config not found: ${file}. Run \`hyde\` in a project folder to set Hyde Code up.`);
   }
   const config = parseConfig(JSON.parse(readFileSync(file, 'utf8')), file);
   mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CLASSIFIERS, COMPLEXITY_LEVELS, EFFORT_LEVELS } from './routing.ts';
 
 // Every state change in the harness is one of these events. Current state is a fold over
 // the log (see projection.ts), so a crash or restart is recovered by replaying it.
@@ -46,11 +47,12 @@ const harnessEvent = z.discriminatedUnion('type', [
   }),
 ]);
 
-export const SOURCE_KINDS = ['telegram', 'slack', 'discord', 'whatsapp', 'web', 'cli', 'api', 'schedule', 'planner'] as const;
+/** Where a task came from. `hyde-ai` is the Hyde AI desktop assistant (voice and text). */
+export const SOURCE_KINDS = ['telegram', 'slack', 'discord', 'whatsapp', 'web', 'cli', 'api', 'schedule', 'planner', 'hyde-ai'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 const source = z.object({ kind: z.enum(SOURCE_KINDS), chatId: z.string().optional() });
 
-export const RUN_MODES = ['start', 'continue', 'answer', 'fix', 'plan', 'review', 'review_fix', 'conflict', 'browser_fix'] as const;
+export const RUN_MODES = ['start', 'continue', 'answer', 'fix', 'plan', 'review', 'review_fix', 'conflict', 'browser_fix', 'classify'] as const;
 export type RunMode = (typeof RUN_MODES)[number];
 
 export const APPROVAL_KINDS = ['first-push', 'merge', 'promote', 'plan', 'destructive', 'new-dependency', 'scope-change', 'client-intake'] as const;
@@ -82,7 +84,27 @@ export const eventPayloads = {
     size: z.enum(['S', 'M', 'L']).optional(),
     /** Pin to one agent profile by name; otherwise the router picks. */
     agent: z.string().optional(),
+    /** Complexity the planner gave a subtask. */
+    complexity: z.enum(COMPLEXITY_LEVELS).optional(),
+    /** A client's suggestion (e.g. Hyde AI); the hub's rules decide. */
+    complexityHint: z.enum(COMPLEXITY_LEVELS).optional(),
   }),
+  /** A task's complexity level, and who decided it. The latest event wins. */
+  'task.classified': z.object({
+    taskId: z.string(),
+    level: z.enum(COMPLEXITY_LEVELS),
+    by: z.enum(CLASSIFIERS),
+    reason: z.string(),
+    /** False when the rules only guessed and a model should confirm. */
+    confident: z.boolean().default(true),
+  }),
+  /**
+   * The task leaves its agent (it stopped twice without finishing, or its quota is out for long):
+   * the worktree and branch stay, the session is dropped, and the router picks a new agent.
+   */
+  'task.reassigned': z.object({ taskId: z.string(), from: z.string(), reason: z.string() }),
+  /** The router could not place a task's next run without a weaker model, so the task waits. */
+  'task.waiting': z.object({ taskId: z.string(), reason: z.string() }),
   'task.status_changed': z.object({
     taskId: z.string(),
     from: z.enum(TASK_STATUSES),
@@ -99,6 +121,8 @@ export const eventPayloads = {
     writeScope: z.array(z.string()).default([]),
     role: z.string().optional(),
     size: z.enum(['S', 'M', 'L']).optional(),
+    /** What the planner decided instead of asking; shown to the owner, who can change them. */
+    assumptions: z.array(z.string()).default([]),
   }),
   'task.workspace_assigned': z.object({
     taskId: z.string(),
@@ -149,6 +173,12 @@ export const eventPayloads = {
     agent: z.string().default('claude-1'),
     node: z.string().default('local'),
     mode: z.enum(RUN_MODES),
+    /** The complexity tier the run was placed on, and the model and effort passed to the CLI. */
+    tier: z.enum(COMPLEXITY_LEVELS).optional(),
+    model: z.string().optional(),
+    effort: z.enum(EFFORT_LEVELS).optional(),
+    /** Why this agent and tier (upgrades and effort changes say so here). */
+    why: z.string().optional(),
   }),
   'run.event': z.object({ runId: z.string(), event: harnessEvent }),
   'run.exited': z.object({ runId: z.string(), code: z.number().nullable(), signal: z.string().nullable() }),
@@ -161,6 +191,18 @@ export const eventPayloads = {
     options: z.array(z.string()).default([]),
   }),
   'question.answered': z.object({ questionId: z.string(), answer: z.string(), by: z.string() }),
+  /** A new question matched an earlier one: an answered match was returned at once, an open one linked. */
+  'question.matched': z.object({
+    questionId: z.string(),
+    taskId: z.string(),
+    runId: z.string(),
+    text: z.string(),
+    status: z.enum(['open', 'answered']),
+    score: z.number(),
+    by: z.string(),
+    /** The asking run waits for this question's answer. */
+    blocking: z.boolean().default(false),
+  }),
   'approval.requested': z.object({
     approvalId: z.string(),
     taskId: z.string(),
@@ -198,6 +240,45 @@ export const eventPayloads = {
     decision: z.enum(['allow', 'deny', 'approval']),
     rule: z.string(),
   }),
+  /** The owner's inline comment on the task's diff. */
+  'task.comment_added': z.object({ taskId: z.string(), commentId: z.string(), file: z.string(), line: z.number().int().optional(), text: z.string(), by: z.string() }),
+  /** The owner sent the open comments to the agent (a review_fix turn follows). */
+  'task.comments_sent': z.object({ taskId: z.string(), commentIds: z.array(z.string()), by: z.string() }),
+  /** The worktree state before an agent turn: HEAD plus a stash commit of uncommitted changes. */
+  'task.checkpoint': z.object({ taskId: z.string(), runId: z.string(), head: z.string(), stash: z.string().optional() }),
+  /** The owner undid the last agent turn: the worktree went back to that turn's checkpoint. */
+  'task.undone': z.object({ taskId: z.string(), runId: z.string(), head: z.string(), by: z.string() }),
+  /** The task's checklist (agent update_todos, planner seed or owner edit); the latest wins. */
+  'task.todos_updated': z.object({
+    taskId: z.string(),
+    todos: z.array(z.object({ text: z.string(), done: z.boolean() })),
+    by: z.string(),
+  }),
+  /** Plan then build: the owner must approve the plan before the build run (default for high complexity). */
+  'task.plan_gate_set': z.object({ taskId: z.string(), on: z.boolean(), by: z.string() }),
+  /** One step an agent took in the live browser (frames are not logged; keyframes are artifacts). */
+  'browser.action': z.object({
+    taskId: z.string(),
+    runId: z.string(),
+    step: z.number().int(),
+    op: z.string(),
+    label: z.string(),
+    url: z.string(),
+    ok: z.boolean(),
+    error: z.string().optional(),
+    text: z.string().optional(),
+    box: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    viewport: z.object({ width: z.number(), height: z.number() }),
+    artifactId: z.string().optional(),
+  }),
+  /** The skills a task's runs get (planner choice or the owner's change). */
+  'task.skills_set': z.object({ taskId: z.string(), skills: z.array(z.string()), by: z.string() }),
+  /** An agent proposes a new skill; nothing is saved until the owner approves. */
+  'skill.proposed': z.object({ skillId: z.string(), taskId: z.string().optional(), name: z.string(), description: z.string(), body: z.string(), by: z.string() }),
+  'skill.decided': z.object({ skillId: z.string(), approved: z.boolean(), by: z.string() }),
+  'skill.written': z.object({ skillId: z.string(), path: z.string() }),
   'lesson.proposed': z.object({ lessonId: z.string(), taskId: z.string().optional(), text: z.string(), by: z.string() }),
   'lesson.decided': z.object({ lessonId: z.string(), approved: z.boolean(), by: z.string() }),
   'lesson.written': z.object({ lessonId: z.string(), taskId: z.string() }),

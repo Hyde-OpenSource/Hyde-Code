@@ -1,8 +1,12 @@
 # CLAUDE.md
 
-## Project: Hyde Code
-Self-hosted harness that drives the official agent CLIs (see `docs/plan.md`, `context.md`, `README.md`).
-- Run `pnpm test` and `pnpm typecheck` before every commit.
+## Project: Hyde AI (Hyde Code hub + desktop assistant)
+One repo, two parts (see `README.md`, `docs/HYDE_AI.md`, `docs/plan.md`, `context.md`):
+the Hyde Code hub (TypeScript: `apps/hub`, `apps/web`, `apps/node`, `packages/*`, CLI `hyde`) and the
+Hyde AI desktop assistant (Rust: `apps/desktop`, binary `hyde-ai`, also `hyde ai`).
+- Run `pnpm test` and `pnpm typecheck` before every commit; also `pnpm desktop:test` and `pnpm desktop:lint` when `apps/desktop` changes.
+- The desktop app talks to the hub only through the contract in `docs/HYDE_AI.md` §3; change both sides together and update that section.
+- `hyde` is the hub CLI and `hyde-ai` is the desktop binary; no installer may overwrite the other's command.
 - All state changes go through `EventStore.append`; the orchestrator is the only writer of task state.
 - Never use `claude --bare` and never pass subscription credentials anywhere; agent envs are allowlisted in `scrubEnv`.
 
@@ -33,5 +37,17 @@ Short version of the rules:
 - 2026-10-29: Watch quota before real test runs; the owner's Claude 5-hour window hit 99% during testing.
 - 2026-10-29: Never name a scratch script after a stdlib module (pty.py shadowed `pty`); run scratch Python with -I.
 - 2026-10-29: Check UI work with real screenshots (Playwright) at desktop and phone widths; overlapping name tags and an overflowing board only showed up there.
+- 2026-10-29: An MIT repo can bundle assets under other licences (LICENSE-ASSETS): check art, maps and fonts separately before copying, and never vendor art whose licence forbids redistribution.
+- 2026-10-29: tsx's dynamic-import transform fails to parse a file that starts with a shebang; launch TS entry files through a wrapper script instead of `#!` lines.
+- 2026-10-29: Never accept terms or trust prompts on the owner's behalf; remove any trust records created while testing.
+- 2026-10-30: Two installers both wrote `~/.local/bin/hyde`; give every binary a distinct name and never overwrite a file you didn't create.
+- 2026-10-30: Test the desktop ↔ hub bridge against a mock hub with a scratch `HYDE_HOME`; the real hub dispatches queued tasks and spends agent quota.
+- 2026-10-30: Desktop commands in tests act on the real desktop (opening apps, volume); test with plan-only checks or harmless intents.
 
 <!-- devflow:end -->
+- 2026-11-06: Run a real end-to-end test before calling routing work done; a rules bug and a review-tier gap only showed up on real tasks.
+- 2026-11-06: After a rate limit, keep the known reset time; never overwrite it with a guess.
+- 2026-11-06: Claim the hub port before any side effect (event store, hooks, chat polling).
+- 2026-11-06: Playwright MCP saves screenshots into the session's working copy; move them out at once and delete `.playwright-mcp` afterwards.
+- 2026-11-06: Pass hints to the desktop command matcher alongside the text; it normalises text, so markers inside it are lost.
+- 2026-11-06: Adding a field with a zod `.default()` to an event payload is not enough: old events in the log never had it. The store reads every event through the current schema; test new hubs against an old ~/.hyde event log.

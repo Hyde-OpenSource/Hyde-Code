@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -19,6 +20,22 @@ afterEach(() => {
 });
 
 describe('EventStore', () => {
+  it('fills in fields added since an event was written (old task.planned without assumptions)', () => {
+    const { store: s, path } = store();
+    s.append({ type: 'task.created', actor: harness, taskId: 'T-1', payload: { taskId: 'T-1', projectId: 'demo', title: 'Old', spec: 'Old', source: { kind: 'cli' } } });
+    s.append({ type: 'task.planned', actor: harness, taskId: 'T-1', payload: { taskId: 'T-1', runId: 'R-1', children: [] } });
+    s.close();
+    // Rewrite the stored payload the way an older hub wrote it: no writeScope, no assumptions.
+    const db = new DatabaseSync(path);
+    db.prepare(`UPDATE events SET payload = ? WHERE type = 'task.planned'`).run(JSON.stringify({ taskId: 'T-1', runId: 'R-1', children: [] }));
+    db.close();
+
+    const reopened = new EventStore(path);
+    const state = replay(reopened.list());
+    expect(state.tasks.get('T-1')).toMatchObject({ planned: true });
+    reopened.close();
+  });
+
   it('appends, lists and survives a reopen', () => {
     const { store: s, path } = store();
     s.append({

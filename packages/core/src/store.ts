@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { parsePayload, type Actor, type EventPayloadInput, type EventType, type HarnessEventRecord } from './events.ts';
+import { eventPayloads, parsePayload, type Actor, type EventPayloadInput, type EventType, type HarnessEventRecord } from './events.ts';
 
 export interface AppendInput<T extends EventType> {
   type: T;
@@ -124,6 +124,18 @@ function toRecord(row: Row): HarnessEventRecord {
     ...(row.task_id && { taskId: row.task_id }),
     ...(row.run_id && { runId: row.run_id }),
     ...(row.command_id && { commandId: row.command_id }),
-    payload: JSON.parse(row.payload),
+    payload: upgrade(row.type, JSON.parse(row.payload)),
   } as HarnessEventRecord;
+}
+
+/**
+ * Events written by an older version lack fields added since (e.g. `assumptions` on
+ * task.planned). Reading them through today's schema fills in the defaults, so replay never
+ * sees `undefined` where the type promises a value. A payload the schema rejects is kept as is.
+ */
+function upgrade(type: string, payload: unknown): unknown {
+  const schema = (eventPayloads as Record<string, { safeParse(v: unknown): { success: boolean; data?: unknown } }>)[type];
+  if (!schema) return payload;
+  const parsed = schema.safeParse(payload);
+  return parsed.success ? parsed.data : payload;
 }

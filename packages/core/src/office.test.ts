@@ -41,7 +41,7 @@ describe('agentActivity', () => {
 
   it('shows an agent blocked on a question as needing you', () => {
     const { state } = officeFixture();
-    state.questions.push({ id: 'Q-1', taskId: 'T-1', runId: 'run-1', text: 'Which provider?', blocking: true, options: [], status: 'open', askedTs: '' });
+    state.questions.push({ id: 'Q-1', taskId: 'T-1', runId: 'run-1', text: 'Which provider?', blocking: true, options: [], status: 'open', askedTs: '', matches: [] });
     expect(agentActivity(state, agent('claude-1'))).toMatchObject({ mood: 'needs-you', taskId: 'T-1' });
     expect(openCount(state)).toBe(1);
     state.tasks[0]!.status = 'cancelled';

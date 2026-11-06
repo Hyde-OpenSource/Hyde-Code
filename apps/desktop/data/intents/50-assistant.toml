@@ -1,0 +1,21 @@
+[[intent]]
+id = "ask_ai"
+risk = "L0"
+action = "ai.ask"
+triggers = ["ask", "explain", "tell me", "write", "summarize", "translate"]
+patterns = [
+  "ask {question*}",
+  "ask ai {question*}",
+  "explain {question*}",
+  "tell me {question*}",
+  "write {question*}",
+  "summarize {question*}",
+  "translate {question*}",
+]
+
+[[intent]]
+id = "help"
+risk = "L0"
+action = "hyde.help"
+triggers = ["help", "commands"]
+patterns = ["help", "what can you do", "show commands", "commands", "list commands"]

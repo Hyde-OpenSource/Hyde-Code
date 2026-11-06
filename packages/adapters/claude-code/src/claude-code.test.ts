@@ -133,3 +133,13 @@ describe('ClaudeCodeAdapter process handling', () => {
     expect(events.at(-1)).toEqual({ type: 'run.failed', reason: 'crashed', detail: 'MCP server(s) failed to connect: hyde' });
   });
 });
+
+describe('tier model and effort flags', () => {
+  it('passes the tier model and every claude --effort level (2.1.318: low, medium, high, xhigh, max)', () => {
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      const args = buildArgs({ cwd: '/w', runDir: '/r', prompt: 'p', model: 'opus', effort });
+      expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 4)).toEqual(['--model', 'opus', '--effort', effort]);
+    }
+    expect(buildArgs({ cwd: '/w', runDir: '/r', prompt: 'p' })).not.toContain('--effort');
+  });
+});

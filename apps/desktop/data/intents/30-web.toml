@@ -1,0 +1,39 @@
+[[intent]]
+id = "web_search"
+risk = "L0"
+action = "web.search"
+response = "Searching the web"
+triggers = ["search", "google", "look up", "find"]
+patterns = [
+  "search for {query*}",
+  "search {query*}",
+  "google {query*}",
+  "look up {query*}",
+  "search the web for {query*}",
+]
+
+[[intent]]
+id = "youtube_search"
+risk = "L0"
+action = "web.youtube"
+response = "Searching YouTube"
+triggers = ["youtube", "play"]
+patterns = [
+  "search youtube for {query*}",
+  "youtube {query*}",
+  "play {query*} on youtube",
+  "play {query*}",
+]
+
+[[intent]]
+id = "open_site"
+risk = "L0"
+action = "web.open"
+response = "Opening website"
+triggers = ["go to", "visit", "website", "browse"]
+patterns = [
+  "go to {site*}",
+  "visit {site*}",
+  "open website {site*}",
+  "browse to {site*}",
+]

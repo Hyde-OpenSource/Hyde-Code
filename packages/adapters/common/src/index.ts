@@ -125,7 +125,13 @@ export abstract class ProcessAdapter implements AgentAdapter {
       env: scrubEnv(process.env, { ...spec.env, ...launch.env }),
       stdio: [launch.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
-    if (launch.stdin !== undefined) child.stdin?.end(launch.stdin);
+    if (launch.stdin !== undefined) {
+      // An agent may exit without reading its stdin; that EPIPE is not a failure of the run.
+      child.stdin?.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code !== 'EPIPE') throw err;
+      });
+      child.stdin?.end(launch.stdin);
+    }
     // stderr is drained so a chatty CLI can never block on a full pipe.
     child.stderr?.resume();
     const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) => {

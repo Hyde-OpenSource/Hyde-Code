@@ -1,11 +1,67 @@
-# Hyde Code
+# Hyde AI
+
+Your own AI team on your own computer. Tell it what you want, by voice or text, and Hyde AI either
+does it on the desktop or hands it to your coding agents and brings back a reviewed pull request.
+
+Hyde AI is one project with two parts that work together:
+
+| | **Hyde Code** — `hyde` | **Hyde AI desktop** — `hyde ai` / `hyde-ai` |
+|---|---|---|
+| What | Control plane for the official agent CLIs (Claude Code, Codex, OpenCode, any ACP agent) | Voice and desktop assistant |
+| Does | Tasks, worktrees, planning, review, approvals, PRs, merges, chat apps, the office | Apps, volume, web, free AI engine (OmniRoute, OpenRouter, Groq, Gemini, Ollama), installs OpenCode/OmniRoute, **assigns and follows Hyde Code tasks** |
+| Code | `apps/hub`, `apps/web`, `apps/node`, `packages/*` (TypeScript, Node 24) | `apps/desktop` (Rust, one 2.7 MB binary) |
+| UI | Office at `127.0.0.1:7420`, terminal UI, Telegram/Slack/Discord | App window at `127.0.0.1:7878` |
+
+```
+you ── voice / text ──▶ Hyde AI desktop ──▶ desktop action (open apps, volume, web, installs)
+                              │
+                              └─ "hyde code add a dark mode toggle in my-site using codex"
+                                          ▼
+                     Hyde Code hub ─▶ plan ─▶ agent in a worktree ─▶ checks ─▶ review ─▶ PR
+                                          │
+                questions and approvals come back to the desktop app, the office and chat
+```
+
+How the two talk to each other, which commands to use and the roadmap: [docs/HYDE_AI.md](docs/HYDE_AI.md).
+
+## Install everything
+
+Requirements: Node.js 24+, git, Rust ([rustup.rs](https://rustup.rs)), `gh` (signed in) for PRs, and at
+least one agent CLI signed in (Claude Code, Codex, OpenCode, …).
+
+```bash
+git clone https://github.com/Hyde-OpenSource/Hyde-Code.git hyde-ai && cd hyde-ai
+./scripts/install.sh   # pnpm install + office build + `hyde` CLI + `hyde-ai` desktop app
+```
+
+Then: `hyde` inside a project folder (trust it, start the hub, open the office), and `hyde ai`
+(or **Hyde AI** in the app menu) for the assistant. Say *“hyde code add a footer in this project”*
+or *“what is waiting for me”*.
+
+## The desktop assistant (`apps/desktop`)
+
+| Tab | What |
+|---|---|
+| **Assistant** | Type or speak. Desktop commands run instantly (L0) or after a confirm (L2+); `and` runs steps together, `then` in order. |
+| **Hyde Code** | Assign a task (project, agent, default ★), answer agent questions, approve pushes, merge, stop, retry, open the office. |
+| **AI tools** | One-click OpenCode and OmniRoute installs with a live log; start them. |
+| **Apps** · **AI engine** | Known apps; pick a free model provider, paste a key, load models, test. |
+
+`hyde ai doctor` checks the machine, the hub and the AI engine. `hyde ai run <request>` runs one
+request from the terminal. Desktop settings live in `~/.config/hyde-ai/`. Hyde Code's live in `~/.hyde/`.
+The AI engine only answers or rewrites into Hyde AI's own commands, which the rules engine checks
+again, so a model can never run anything that isn't defined. Details: [apps/desktop/README.md](apps/desktop/README.md).
+
+---
+
+# Hyde Code (the hub)
 
 A self-hosted control plane that drives the official agent CLIs you already pay for (Claude Code,
 Codex, OpenCode and any ACP agent such as Gemini CLI) and owns everything around them: tasks,
 worktrees, planning, review, approvals, chat, a web dashboard and the devflow files.
 The research and build plan is in [docs/plan.md](docs/plan.md).
 
-**Nothing is compulsory.** `pnpm hyde setup` (or Settings in the dashboard) shows what is installed
+**Nothing is compulsory.** `hyde setup` (or Settings in the dashboard) shows what is installed
 and signed in on your machine and lets you pick which agents, stages and chat apps to use.
 
 ## How it stays inside the vendor terms
@@ -14,31 +70,69 @@ Hyde Code launches each vendor's unmodified CLI, signed in by its owner, on that
 It never reads, copies or stores CLI credentials, never uses `claude --bare`, and starts every agent
 with an allowlisted environment (no `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or chat tokens).
 
-## Setup
+## Install Hyde Code only
 
-Requirements: Node.js 24+, git, `gh` (signed in) for PRs, and at least one agent CLI signed in.
+Requirements: Node.js 24+, git, `gh` (signed in) for PRs, and at least one agent CLI signed in
+(Claude Code, Codex, OpenCode, …).
 
 ```bash
+git clone https://github.com/Hyde-OpenSource/Hyde-Code.git && cd Hyde-Code
 corepack enable pnpm
 pnpm install
-pnpm hyde setup        # pick agents, project, stages, chat apps; writes hyde.config.json and .env
-pnpm build             # the web dashboard
-pnpm start             # the hub
-pnpm hyde dashboard    # prints a one-time login link for http://127.0.0.1:7420
-pnpm hyde tui          # or: the same office in your terminal
+pnpm build             # the web office
+pnpm install-cli       # puts `hyde` on your PATH (~/.local/bin)
 ```
+
+## Use it like `claude` or `codex`
+
+Open a terminal in any project folder and run:
+
+```bash
+hyde
+```
+
+- **First time in a folder**, Hyde asks whether you trust it, and tells you that using Hyde
+  Code means accepting the [Terms](TERMS.md). If the folder is not a git repository it offers
+  to run `git init`.
+- **First time on this machine**, it asks which agents, stages and chat apps you want
+  (nothing is compulsory).
+- It registers the folder as a project, starts the hub in the background if needed, and opens
+  the office in the terminal. Press `w` for the web office, `q` to leave (the hub keeps working).
+
+Other commands, all from inside a project folder:
+
+| Command | What it does |
+|---|---|
+| `hyde web` | Open the web office on this project |
+| `hyde new "Add a footer"` | A task for this project |
+| `hyde status` | What is running, what waits for you |
+| `hyde answer Q-3 "yes"` · `approve A-2` · `deny A-2` · `merge T-4` · `stop T-4` | Same as in chat |
+| `hyde projects` | Every project Hyde knows |
+| `hyde forget` | Stop trusting this folder and remove the project |
+| `hyde hub stop` · `start` · `restart` · `status` · `logs` | The background hub |
+| `hyde setup` | Change agents, stages and chat apps |
+
+Everything lives in `~/.hyde` (settings, tokens in `.env` with mode 0600, trusted folders,
+history, worktrees). Set `HYDE_HOME` to use another place.
 
 ## Two ways to watch: web or terminal
 
 Both read the same hub, so you can switch at any time and nothing is lost.
 
-- **Web** (`pnpm hyde dashboard`): a pixel-art office. Each agent is a person at a desk: typing when
-  working, at the war-room whiteboard when planning, at the war-room table when reviewing, in the
-  kitchen when free. Hyde (the hub) sits in the corner office and envelopes fly when work is handed
-  out, questions reach your desk, reviews come back and PRs go out. Click a person to watch their
-  session live. The side panel has *Needs you* (answer, approve, merge), *Team* and *Activity*.
-  The **⌨ Terminal** button shows how to switch.
-- **Terminal** (`pnpm hyde tui`): rooms, the team table with quota bars and the selected agent's
+- **Web** (`hyde web`): a **Projects** sidebar like other agent apps (every folder, what runs there, what waits for you; *All projects* or one at a time; *+* adds a folder with the same trust question), and the office from [Munder Difflin](https://github.com/chaitanyagiri/munder-difflin)
+  (MIT), ported in `apps/web/src/md`. Each agent is a person on the floor: at their desk
+  with the monitor lit while working, wandering, on coffee breaks or errands when free,
+  walking to the door when they need you. Hyde (the hub) is the boss at the corner desk.
+  Envelopes fly for hand-offs, questions, reviews and PRs; the wall boards show the
+  tasks. The right side is Hyde's Command Center (Tasks, Ask me, Activity) or the
+  selected agent with its live session; the bottom strip has the agent cards and the
+  dispatch box. Light and dark themes. The **Terminal** button shows how to switch.
+- **Floor art**: the office map uses LimeZu's "Modern Interiors" tiles, which may not be
+  redistributed, so Hyde Code ships simple stand-in tiles. If you own the pack
+  ([limezu.itch.io/moderninteriors](https://limezu.itch.io/moderninteriors)), run
+  `hyde tiles <unzipped folder>` once; it finds the three sheets the map needs (or
+  pass `interiors.png=<file>` etc. by hand) and keeps them in `.hyde/` (gitignored).
+- **Terminal** (`hyde`, or `hyde tui`): rooms, the team table with quota bars and the selected agent's
   live session. Keys: `1`–`5` screens (Office, Board, Inbox, Activity, Usage), `↑↓` pick,
   `enter` open, `a` approve or merge, `d` deny, `r` reply, `n` new task, `c` client message,
   `:` any slash command, `w` open the web office, `q` quit. Set `NO_COLOR=1` for plain text.
@@ -55,8 +149,9 @@ overwrites an existing hook). Also turn on GitHub branch protection.
    WhatsApp) that you accept first. Client text is always treated as data, never as instructions.
 2. **Plan** (optional): a planner asks questions and splits the work into subtasks with a done-when,
    a write scope and dependencies. Big plans wait for your approval.
-3. **Route**: each subtask goes to the best agent by role, quota headroom and recent failures.
-   New runs wait while an account is above its quota soft ceiling.
+3. **Rate and route**: every task gets a complexity level (see below); each run goes to an agent
+   that serves that tier, by role, quota headroom and recent failures. New runs wait while an
+   account is above its quota soft ceiling, rather than drop to a weaker model.
 4. **Execute**: the agent works on `<agent>/feature/t-<n>-<slug>` in its own worktree, cut from the
    latest `origin/<base>`. It asks you through `ask_question`; your answer resumes the same session.
 5. **Verify**: project checks, then (optional) a browser check with screenshots as proof of work.
@@ -69,10 +164,52 @@ A policy hook checks Claude's tool calls (no pushes, merges, protected checkouts
 edits outside the write scope; new dependencies need your approval) and pauses an agent after
 repeated denials. Agents propose lessons; approved ones go into `CLAUDE.md` and `AGENTS.md`.
 
-## Commands (chat, dashboard or `pnpm hyde <command>`)
+## Tiers, modes and effort
+
+**Complexity.** Every task is rated `trivial`, `low`, `medium` or `high` before it runs. Hub rules
+decide first (rename or typo → trivial, docs or config → low, a feature or fix → medium,
+security, migrations, "the whole app" or anything vague → high). When the rules are only
+guessing, the planner decides; with no planner, a cheap read-only run decides. A Hyde AI hint
+counts only when the rules can't tell. You can change it any time with `/level T-3 high`, the
+buttons on the task page, or `POST /api/tasks/:id/level`. Trivial tasks skip the planner.
+
+**Models per tier.** Each agent maps the four levels to a model and an effort (`tiers` in the
+config, or the tier editor in Settings). Claude Code and Codex have them built in:
+
+| Level | Claude model | Codex model | Effort | Used for |
+|---|---|---|---|---|
+| high | opus | gpt-6-astra | high | high coding; planning and review of medium and high work |
+| medium | sonnet | gpt-6.1-sol | medium | medium coding; planning and review of trivial and low work |
+| low | haiku | gpt-6-luna | low | low coding |
+| trivial | haiku | gpt-6-luna | low | renames, typos, one-liners |
+
+A profile's single `model` is not used when a built-in table applies; add `tiers` to change it.
+Every OpenCode `opencode/*` model counts as free. Other adapters use their one `model` for every
+tier until you add `tiers`. If an agent has no
+entry for a level, it uses its next stronger tier, never a weaker one. The hub states every
+upgrade on the run (`why`).
+
+**Modes** (`routing.mode`, also in `hyde setup` and Settings):
+- `balanced` (default): a strong model plans and reviews, and code goes to the tier its complexity needs.
+- `claude-only`: Claude models only, by complexity. Claude may review its own work in a fresh session.
+- `free-first`: free models (OpenCode's `opencode/*`) take trivial and low work; Claude takes the rest.
+- `assistant-plans`: the Hyde AI desktop assistant writes the task for its own requests and the hub
+  doesn't plan them again; the CLIs code. In every other mode the assistant's free model only routes.
+
+**Hyde effort** (`routing.effort`): `saver` moves every tier's effort one step down, `max` one step
+up, `balanced` keeps it, and `auto` acts like saver when a login is above 60% of its 5-hour window.
+
+**Hard rules in every mode:** planning, review and high-complexity coding never run on a free
+model. When the right tier is out of quota, the task waits (and you are told once) instead of
+moving to a weaker model. An agent that stops without `complete_task` is nudged once, then the
+task moves one tier up to another agent in the same worktree. Questions are asked once: a repeat
+from any agent gets the earlier answer, or is linked to the open question. The planner asks at
+most `planner.maxQuestions` blocking questions; everything else becomes an assumption you can see.
+
+## Commands (chat, dashboard or `hyde <command>`)
 
 `/new <task> #project @agent`, `/client <message>`, `/status`, `/agents`, `/usage`, `/logs T-3`,
-`/stop T-3`, `/stop all`, `/retry T-3`, `/answer Q-2 <text>`, `/approve A-1`, `/deny A-1`,
+`/stop T-3`, `/stop all`, `/retry T-3`, `/level T-3 high`, `/answer Q-2 <text>`, `/approve A-1`, `/deny A-1`,
 `/approve L-1` (lessons), `/merge T-3`, `/promote #project`, `/projects`. Slack and Discord also
 accept `hyde new …` and `!new …`.
 
@@ -88,20 +225,34 @@ accept `hyde new …` and `!new …`.
 - **Containers**: `"isolation": "container"` with `container.image` runs an agent in Docker; sign in
   once inside its home volume.
 - **Plugins**: `plugins: ["./my-plugin.ts"]`, exporting `register({ adapters, gateways, config })`.
+- **Local apps (Hyde AI, scripts)**: a typed HTTP API with its own narrower token
+  (`<dataDir>/clients/hyde-ai.token`); the running hub's address is in `~/.hyde/hub.json`.
+  See [docs/api.md](docs/api.md).
 
 ## Development
 
 ```bash
-pnpm test        # vitest
-pnpm typecheck   # tsc (hub, packages, web)
+pnpm test            # vitest (hub, packages, web)
+pnpm typecheck       # tsc
+pnpm desktop:test    # cargo test (apps/desktop)
+pnpm desktop:lint    # clippy -D warnings + rustfmt
+pnpm desktop -- ui   # run the desktop app from source
+pnpm test:all        # everything
 ```
 
 | Path | Contents |
 |---|---|
 | `apps/hub` | Config, orchestrator, router, planner, review, policy, merge queue, notifier, API, CLI, setup, terminal UI (`tui*.ts`) |
-| `apps/web` | Web dashboard: pixel office (`src/office`), Board, Inbox, Task, Usage, Audit, Settings |
+| `apps/web` | Web dashboard: the office (`src/md`, ported from Munder Difflin), Board, Inbox, Task, Usage, Audit, Settings |
 | `apps/node` | Worker node for teammates' machines |
+| `apps/desktop` | Hyde AI desktop assistant (Rust workspace: `hyde-core` matcher, `hyde-pack` compiler, `hyde-ai` app and UI) |
 | `packages/core` | Contracts, event schemas, event store, projections, lifecycle, chat commands |
 | `packages/adapters/*` | claude-code, codex, opencode, acp, command, and the shared process base |
 | `packages/gateways/*` | telegram, slack, discord, whatsapp |
 | `packages/workspace`, `policy`, `devflow`, `mcp-harness` | Git and hosts, rules, devflow files, agent tools |
+
+## Credits
+- Office UI, scene engine and design system: [Munder Difflin](https://github.com/chaitanyagiri/munder-difflin) by Chaitanya Giri (MIT).
+- Office map: [shahar061/the-office](https://github.com/shahar061/the-office) (ISC).
+- Fonts: Press Start 2P, Inter, JetBrains Mono (SIL OFL 1.1).
+- Floor tiles, when you import your own copy: [Modern Interiors by LimeZu](https://limezu.itch.io/).

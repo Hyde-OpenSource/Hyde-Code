@@ -1,9 +1,16 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
+  ADAPTER_MAX_EFFORT,
   apply,
+  COMPLEXITY_LEVELS,
   canTransition,
+  clampEffort,
+  classifyByRules,
+  effortShift,
+  shiftEffort,
+  type Complexity,
   HELP_TEXT,
   nextId,
   replay,
@@ -19,6 +26,8 @@ import {
   type HarnessState,
   type Inbound,
   type OutboundMessage,
+  type QuestionView,
+  type RunView,
   type RunHandle,
   type RunMode,
   type RunSpec,
@@ -30,18 +39,27 @@ import { buildTaskPacket, HARNESS_ENV, hasProgressEntry, LESSON_FILES, readLesso
 import { MCP_MAIN } from '@hyde/mcp-harness';
 import { compileProfile, DEFAULT_DEV_PROFILE } from '@hyde/policy';
 import { branchName } from '@hyde/workspace';
-import { accountQuota, route, type AgentPool } from './agents.ts';
+import { accountQuota, jobFor, placeOn, route, tierTable, type AgentPool, type RoutedRun } from './agents.ts';
 import { browserCheck, type BrowserCheckInput, type BrowserCheckResult } from './browser.ts';
 import type { HubConfig, ProjectConfig } from './config.ts';
 import { worktreesRoot, type HostOps } from './host.ts';
 import type { Notifier } from './notifier.ts';
-import { checkPlan, PLAN_SCHEMA, plannerPrompt } from './planner.ts';
+import { checkPlan, CLASSIFY_SCHEMA, classifyPrompt, HARNESS_MODE_LINE, parseClassification, PLAN_SCHEMA, plannerPrompt } from './planner.ts';
 import { decide as decidePolicy, hookResponse } from './policy-engine.ts';
 import { blockingFindings, parseReview, REVIEW_SCHEMA, reviewFixPrompt, reviewPrompt } from './review.ts';
+import { deliverSkills, discoverSkills, isSkillName, withExcludes, writeSkill, type Skill } from '@hyde/skills';
+import { existsSync, readFileSync } from 'node:fs';
+import { needsApproval } from '@hyde/browser-live';
+import { copyFileSync, rmSync } from 'node:fs';
+import { LiveBrowser } from './live.ts';
+import { findMatch, questionOf } from './questions.ts';
+import { expandTemplate, loadTemplates } from './templates.ts';
 import { readWorkflow, renderTemplate, type Workflow } from './workflow.ts';
 
 const HARNESS: Actor = { kind: 'harness', id: 'hub' };
 const CONTINUATION_MODES: RunMode[] = ['continue', 'answer', 'fix', 'review_fix', 'conflict', 'browser_fix'];
+/** Runs that read the repo and answer in JSON; they never edit or own the task's session. */
+const READ_ONLY_MODES: RunMode[] = ['plan', 'review', 'classify'];
 
 export interface OrchestratorDeps {
   config: HubConfig;
@@ -60,6 +78,7 @@ export interface OrchestratorDeps {
   workflow?: (project: ProjectConfig) => Promise<Workflow>;
   log?: (msg: string) => void;
   now?: () => number;
+  live?: LiveBrowser;
 }
 
 interface LiveRun {
@@ -92,6 +111,8 @@ export class Orchestrator {
   private readonly now: () => number;
   private readonly browser: NonNullable<OrchestratorDeps['browser']>;
   private readonly workflow: NonNullable<OrchestratorDeps['workflow']>;
+  /** The live browser channel (frames in memory, previews per task). */
+  readonly browserLive: LiveBrowser;
 
   constructor(private readonly deps: OrchestratorDeps) {
     this.state = replay(deps.store.list());
@@ -103,6 +124,7 @@ export class Orchestrator {
     this.now = deps.now ?? Date.now;
     this.browser = deps.browser ?? browserCheck;
     this.workflow = deps.workflow ?? readWorkflow;
+    this.browserLive = deps.live ?? new LiveBrowser();
   }
 
   get config(): HubConfig {
@@ -117,7 +139,7 @@ export class Orchestrator {
       const task = this.state.tasks.get(run.taskId);
       if (!task) continue;
       if (task.status === 'running') this.setStatus(task, 'ready', 'hub restarted during the run');
-      if (task.status === 'clarifying' && run.mode === 'plan') this.retryAt.set(task.id, 0);
+      if (task.status === 'clarifying' && (run.mode === 'plan' || run.mode === 'classify')) this.retryAt.set(task.id, 0);
       if (task.status === 'review' && run.mode === 'review') void this.verify(task.id, { fromReview: true });
     }
     for (const task of this.state.tasks.values()) {
@@ -134,6 +156,7 @@ export class Orchestrator {
 
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    this.browserLive.stopAll();
     for (const run of this.live.values()) await run.adapter.interrupt(run.handle);
   }
 
@@ -210,7 +233,7 @@ export class Orchestrator {
       if (task.status !== 'clarifying' || this.busy.has(task.id) || this.runningFor(task.id)) continue;
       if ((this.retryAt.get(task.id) ?? 0) > this.now()) continue;
       if (this.live.size >= this.config.maxConcurrentRuns) return;
-      await this.dispatch(task, 'plan');
+      await this.dispatch(task, this.wantsPlan(task) ? 'plan' : 'classify');
     }
   }
 
@@ -240,7 +263,11 @@ export class Orchestrator {
 
   private recordQuota(account: string, q: { window: string; status: 'allowed' | 'warning' | 'rejected'; utilization?: number; resetsAt?: number }): void {
     const prev = this.state.quotas.get(`${account}:${q.window}`);
-    const same = prev && prev.status === q.status && prev.utilization === q.utilization && prev.resetsAt === q.resetsAt;
+    // Rolling windows move their reset time a little on every poll; that alone is not news
+    // (Codex logged 668 quota events in three days, mostly resetsAt drifting by seconds).
+    const pct = (u?: number) => (u === undefined ? undefined : Math.round(u * 100));
+    const resetMoved = Math.abs((prev?.resetsAt ?? 0) - (q.resetsAt ?? 0)) >= 15 * 60 && !(q.status === 'allowed' && (q.utilization ?? 0) === 0);
+    const same = prev && prev.status === q.status && pct(prev.utilization) === pct(q.utilization) && !resetMoved;
     if (same) return;
     this.append({
       type: 'quota.updated',
@@ -288,42 +315,60 @@ export class Orchestrator {
 
     // Continuations stay with the agent that owns the session; everything else is routed.
     let agent: string;
+    let routedRun: RoutedRun;
     if (continuing && task.agent) {
       agent = task.agent;
       const profile = this.deps.pool.profile(agent);
       const quota = profile ? accountQuota(this.state, profile.account, this.now()) : undefined;
-      if (!profile?.enabled || quota?.blocked) return false;
+      if (!profile?.enabled) return false;
+      if (quota?.blocked) {
+        await this.waitOrMove(task, mode, agent, quota.blocked, quota.blockedUntil);
+        return false;
+      }
+      routedRun = this.sessionPlacement(task, mode, profile, quota?.max ?? 0);
     } else {
-      const routed = route({
-        task,
-        mode,
-        project,
-        state: this.state,
-        pool: this.deps.pool,
-        config: this.config,
-        now: this.now(),
-        ...(extra.author && { author: extra.author }),
-      });
-      if ('wait' in routed) return false;
+      const input = { task, mode, project, state: this.state, pool: this.deps.pool, config: this.config, now: this.now(), ...(extra.author && { author: extra.author }) };
+      // A planner that failed on this task is skipped for the retry, if another one can plan.
+      const failedPlanners = mode === 'plan' ? this.failedPlanRuns(task).map((r) => r.agent) : [];
+      let routed = route({ ...input, ...(failedPlanners.length && { exclude: failedPlanners }) });
+      if (failedPlanners.length && 'none' in routed) routed = route(input);
+      if ('wait' in routed) {
+        await this.noteWaiting(task, mode, routed.wait);
+        return false;
+      }
       if ('none' in routed) {
         if (mode === 'plan') {
           // No planner available: plan-less flow.
           this.setStatus(task, 'ready', `no planner: ${routed.none}`);
           return false;
         }
+        if (mode === 'classify') {
+          this.classified(task, task.complexity?.level ?? 'medium', 'harness', `no agent could classify it (${routed.none}); kept the rules' guess`);
+          this.setStatus(task, 'ready', 'complexity kept from the rules');
+          return false;
+        }
         if (mode === 'review') return false;
         if (!this.retryAt.has(`none:${task.id}`)) {
           this.retryAt.set(`none:${task.id}`, this.now());
-          await this.notifyTask(task, { text: `${task.id} can't start: ${routed.none}. Enable an agent in Settings or with \`pnpm hyde setup\`.` });
+          await this.notifyTask(task, { text: `${task.id} can't start: ${routed.none}. Enable an agent in Settings or with \`hyde setup\`.` });
         }
         return false;
       }
       agent = routed.agent;
+      routedRun = routed;
     }
     const profile = this.deps.pool.profile(agent)!;
     const host = this.deps.host(profile.node);
-    const readOnly = mode === 'plan' || mode === 'review';
+    const readOnly = READ_ONLY_MODES.includes(mode);
 
+    if (!readOnly && task.worktree && !task.agent) {
+      // Moved off another agent: the new one takes over the same worktree and branch.
+      this.append({
+        type: 'task.workspace_assigned',
+        taskId: task.id,
+        payload: { taskId: task.id, agent, branch: task.branch!, worktree: task.worktree, baseBranch: task.baseBranch ?? project.baseBranch, node: task.node ?? profile.node },
+      });
+    }
     if (!readOnly && !task.worktree) {
       const branch = branchName(agent, 'feature', task.id, task.title);
       // A task that depends on unmerged work starts from that work's branch (stacked PRs).
@@ -351,17 +396,24 @@ export class Orchestrator {
     const adapter = this.deps.pool.adapter(agent);
 
     const packetFile = join(runDir, 'packet.md');
+    const skills = readOnly ? [] : this.taskSkills(this.state.tasks.get(task.id)!, project);
+    if (skills.length && profile.node === 'local') this.deliver(skills, this.state.tasks.get(task.id)!.worktree!, profile.adapter);
     if (!readOnly) {
       writeFileSync(
         packetFile,
         buildTaskPacket({
-          task,
+          // Subtasks follow their parent plan's assumptions.
+          task: task.assumptions.length || !task.parentId ? task : { ...task, assumptions: this.state.tasks.get(task.parentId)?.assumptions ?? [] },
           agent,
-          model: profile.model ?? 'default model',
+          model: routedRun.model ?? profile.model ?? 'default model',
+          ...(routedRun.tier && { tier: routedRun.tier }),
+          checks: project.checks,
+          skills: skills.map((s) => ({ name: s.name, description: s.description })),
           branch: task.branch!,
           baseBranch: task.baseBranch!,
           projectName: project.name ?? project.id,
-          answers: [...this.state.questions.values()].filter((q) => q.taskId === task.id && q.status === 'answered'),
+          answers: this.questionMemory(task).answers,
+          decisions: this.questionMemory(task).decisions,
           lessons: readLessons(project.path),
           canCommit: adapter.canCommit !== false,
           ...(workflow.template && {
@@ -375,6 +427,7 @@ export class Orchestrator {
       );
     }
 
+    if (!readOnly) await this.checkpoint(this.state.tasks.get(task.id)!, runId, host);
     const policy = compileProfile(DEFAULT_DEV_PROFILE);
     // Agents on a teammate's node reach the hub through its public (Tailscale) URL.
     const hubUrl = profile.node === 'local' ? this.deps.hubUrl : (this.config.nodes.publicUrl ?? this.deps.hubUrl);
@@ -387,18 +440,19 @@ export class Orchestrator {
       mcp: {
         command: profile.isolation === 'container' ? 'node' : process.execPath,
         args: ['--import', this.deps.tsxLoader, MCP_MAIN],
-        env: { HYDE_HUB_URL: hubUrl, HYDE_RUN_TOKEN: token },
+        env: { HYDE_HUB_URL: hubUrl, HYDE_RUN_TOKEN: token, ...(!readOnly && this.wantsBrowser(task, project) && { HYDE_BROWSER: '1' }) },
       },
       allow: policy.allow,
       deny: policy.deny,
       readOnly,
       ...(mode === 'plan' && { jsonSchema: PLAN_SCHEMA }),
       ...(mode === 'review' && { jsonSchema: REVIEW_SCHEMA }),
+      ...(mode === 'classify' && { jsonSchema: CLASSIFY_SCHEMA }),
       ...(!readOnly && { writableDirs: [await host.gitCommonDir(project.path)] }),
       ...(this.config.policy.enabled && !readOnly && { policyHook: { url: `${hubUrl}/api/policy/pre-tool-use`, token } }),
       env: { ...HARNESS_ENV, HYDE_AGENT_NAME: agent, HYDE_TASK_ID: task.id },
-      ...(profile.model && { model: profile.model }),
-      ...(profile.effort && { effort: profile.effort }),
+      ...(routedRun.model && { model: routedRun.model }),
+      ...(routedRun.effort && { effort: routedRun.effort }),
     };
 
     if (!readOnly && task.status !== 'running') this.setStatus(task, 'running', `${mode} turn on ${agent}`);
@@ -416,6 +470,10 @@ export class Orchestrator {
         agent,
         node: profile.node,
         mode,
+        tier: routedRun.tier,
+        ...(routedRun.model && { model: routedRun.model }),
+        ...(routedRun.effort && { effort: routedRun.effort }),
+        why: routedRun.why,
       },
     });
 
@@ -431,7 +489,7 @@ export class Orchestrator {
     }
     this.live.set(runId, { handle, adapter, token, stalled: false, denials: 0 });
     this.tokens.set(token, runId);
-    this.log(`${task.id}: dispatched ${runId} (${mode}) on ${agent}`);
+    this.log(`${task.id}: dispatched ${runId} (${mode}) on ${agent} · ${routedRun.tier} · ${routedRun.model ?? 'default model'}${routedRun.effort ? ` · effort ${routedRun.effort}` : ''}`);
     void this.consume(runId, task.id, handle, adapter, profile.account);
     return true;
   }
@@ -439,16 +497,31 @@ export class Orchestrator {
   /** Decides the next turn from the log, so it survives restarts. */
   private nextTurn(task: TaskView, forced?: RunMode): { mode: RunMode; prompt: string } {
     if (forced === 'plan') {
-      const answers = [...this.state.questions.values()]
-        .filter((q) => q.taskId === task.id && q.status === 'answered')
-        .map((q) => ({ q: q.text, a: q.answer! }));
-      return { mode: 'plan', prompt: plannerPrompt({ title: task.title, spec: task.spec, answers, client: task.kind === 'client' }) };
+      const memory = this.questionMemory(task);
+      return {
+        mode: 'plan',
+        prompt: plannerPrompt({
+          title: task.title,
+          spec: task.spec,
+          answers: memory.answers.map((q) => ({ q: q.text, a: q.answer! })),
+          open: memory.open.map((q) => q.text),
+          decisions: memory.decisions.map((q) => ({ q: q.text, a: q.answer!, taskId: q.taskId })),
+          client: task.kind === 'client',
+          maxQuestions: this.config.planner.maxQuestions,
+          skills: this.skills(this.project(task.projectId)).map((s) => ({ name: s.name, description: s.description })),
+          ...(task.complexity && { guess: { level: task.complexity.level, reason: task.complexity.reason } }),
+        }),
+      };
+    }
+    if (forced === 'classify') {
+      const guess = task.complexity ?? { level: 'medium', reason: 'no rule matched' };
+      return { mode: 'classify', prompt: classifyPrompt({ title: task.title, spec: task.spec, guess }) };
     }
     const lastRun = task.runIds.length ? this.state.runs.get(task.runIds.at(-1)!) : undefined;
     const since = lastRun?.dispatchedSeq ?? 0;
     if (task.sessionRef) {
       const answers = [...this.state.questions.values()].filter(
-        (q) => q.taskId === task.id && q.status === 'answered' && (q.answeredSeq ?? 0) > since,
+        (q) => questionOf(q, task.id) && q.status === 'answered' && (q.answeredSeq ?? 0) > since,
       );
       const decisions = [...this.state.approvals.values()].filter(
         (a) => a.taskId === task.id && a.status !== 'open' && (a.decidedSeq ?? 0) > since && a.kind !== 'first-push' && a.kind !== 'merge' && a.kind !== 'promote',
@@ -461,6 +534,22 @@ export class Orchestrator {
               ...answers.map((q) => `The owner answered ${q.id} ("${q.text}"): ${q.answer}`),
               ...decisions.map((a) => `The owner ${a.status} ${a.id} (${a.summary}).${a.status === 'approved' ? ' You may go ahead with it now.' : ' Do not do it; find another way or ask.'}`),
             ].join('\n') + '\nContinue the task.',
+        };
+      }
+      const comments = task.comments.filter((c) => (c.sentSeq ?? 0) > since);
+      if (comments.length) {
+        return {
+          mode: 'review_fix',
+          prompt:
+            'The owner reviewed your diff and left these comments:\n' +
+            comments.map((c) => `- ${c.file}${c.line ? `:${c.line}` : ''}: ${c.text}`).join('\n') +
+            '\n\nAddress each one (or explain with ask_question why not), verify, commit, and call complete_task again.',
+        };
+      }
+      if (task.undone && task.undone.seq > since) {
+        return {
+          mode: 'continue',
+          prompt: `The owner undid your last turn (${task.undone.runId}): the worktree is back to commit ${task.undone.head.slice(0, 7)} and the changes from that turn are gone. Check \`git status\` and \`git log\`, then continue the task in a different way. When done, commit and call complete_task.`,
         };
       }
       if (task.checks && !task.checks.ok && task.checks.seq > since) {
@@ -489,13 +578,21 @@ export class Orchestrator {
       return {
         mode: 'continue',
         prompt:
-          'Continue the task. When it is done and verified, commit and call complete_task. ' +
-          'If you are blocked on a decision, call ask_question.',
+          'Your last turn ended without calling the complete_task tool, so the harness does not know whether you are done. ' +
+          'If the task is done and verified, commit and call complete_task now (summary, how you verified it, files changed). ' +
+          'If it is not done, finish it, then call complete_task. If you are blocked on a decision, call ask_question. ' +
+          'Do not end this turn without calling one of those two tools.',
       };
     }
+    const before = task.leftAgents.at(-1);
     return {
       mode: 'start',
-      prompt: `Start task ${task.id}: ${task.title}\n\n${task.spec}\n\nFollow the task packet in your system prompt.`,
+      prompt:
+        `Start task ${task.id}: ${task.title}\n\n${task.spec}\n\n` +
+        (before
+          ? `${before} worked on this before you and stopped without finishing. Its changes are in this worktree: check \`git status\` and \`git log\`, keep what is right, and finish the task. `
+          : '') +
+        'Follow the task packet in your system prompt.',
     };
   }
 
@@ -529,9 +626,10 @@ export class Orchestrator {
     const task = this.state.tasks.get(run.taskId)!;
     if (run.mode === 'plan') return this.afterPlan(task, runId, live);
     if (run.mode === 'review') return this.afterReview(task, runId);
+    if (run.mode === 'classify') return this.afterClassify(task, runId);
     if (task.status !== 'running') return; // cancelled or moved on while running
 
-    const openBlocking = [...this.state.questions.values()].find((q) => q.runId === runId && q.blocking && q.status === 'open');
+    const openBlocking = this.openBlockingFor(runId);
     if (openBlocking) {
       this.setStatus(task, 'blocked', `waiting for ${openBlocking.id}`, { kind: 'question', id: openBlocking.id });
       return;
@@ -560,10 +658,16 @@ export class Orchestrator {
     }
     if (failure?.reason === 'rate_limit') {
       this.setStatus(task, 'ready', 'rate limited; waiting for the window to reset');
-      this.recordQuota(run.account, { window: 'five_hour', status: 'rejected', resetsAt: Math.floor(this.now() / 1000) + 3600 });
+      // Keep the reset time the CLI reported; guess an hour only when none is known
+      // (the guess made T-1 of the 2026-11-06 run retry hourly before the real 01:30 reset).
+      const known = accountQuota(this.state, run.account, this.now()).blockedUntil;
+      if (!known) this.recordQuota(run.account, { window: 'five_hour', status: 'rejected', resetsAt: Math.floor(this.now() / 1000) + 3600 });
       return;
     }
-    if (failure && failure.reason !== 'cancelled') {
+    // A resumed session that prints nothing is the same as stopping without complete_task
+    // (OpenCode, T-4 runs 10-11): no backoff retries for it.
+    const silent = failure?.reason === 'crashed' && /no output/i.test(failure.detail ?? '') && run.mode !== 'start';
+    if (failure && failure.reason !== 'cancelled' && !silent) {
       const failures = task.runIds.filter((id) => {
         const r = this.state.runs.get(id);
         return r && r.mode !== 'plan' && r.mode !== 'review' && (r.failure || id === runId);
@@ -581,14 +685,364 @@ export class Orchestrator {
       return;
     }
 
-    // Clean exit without complete_task: nudge in the same session, up to the limit.
-    const continuations = task.runIds.filter((id) => this.state.runs.get(id)?.mode === 'continue').length;
-    if (continuations >= this.config.maxContinuations) {
-      await this.fail(task, `${task.id} stopped without reporting done`, `after ${continuations} continuation prompts. Last message: ${run.summary ?? ''}`);
+    // Ended without complete_task: nudge once in the same session, then move the task on.
+    const mine = task.runIds
+      .map((id) => this.state.runs.get(id))
+      .filter((r) => r && !READ_ONLY_MODES.includes(r.mode) && r.agent === run.agent && r.dispatchedSeq > (task.agentSeq ?? 0));
+    const nudges = mine.filter((r) => r!.mode === 'continue').length;
+    if (nudges < this.config.maxContinuations) {
+      this.retryAt.set(task.id, this.now()); // next tick (ticks are seconds apart)
+      this.setStatus(task, 'ready', `turn ended without complete_task; nudging ${run.agent}`);
       return;
     }
-    this.retryAt.set(task.id, this.now() + 1000);
-    this.setStatus(task, 'ready', 'turn ended without complete_task');
+    await this.escalate(task, run.agent, `${run.agent} ended ${nudges + 1} turns without calling complete_task${silent ? ' (the last one printed nothing)' : ''}`);
+  }
+
+  /**
+   * Takes a task away from an agent that keeps stopping without finishing: one tier up (free
+   * models can't take medium work, so this leaves them), on another agent. Pinned tasks, and
+   * tasks nobody else can take, go to the owner instead.
+   */
+  private async escalate(task: TaskView, from: string, reason: string): Promise<void> {
+    if (task.pinnedAgent) {
+      await this.fail(task, `${task.id} stopped without reporting done`, `${reason}. It is pinned to ${from}, so it was not moved. /retry ${task.id} or /stop ${task.id}.`);
+      return;
+    }
+    const level = task.complexity?.level ?? 'medium';
+    const next = COMPLEXITY_LEVELS[Math.min(COMPLEXITY_LEVELS.length - 1, COMPLEXITY_LEVELS.indexOf(level) + 1)]!;
+    const probe = { ...task, leftAgents: [...task.leftAgents, from], complexity: { ...(task.complexity ?? { by: 'harness' as const, reason: '', seq: 0 }), level: next, confident: true } };
+    const project = this.project(task.projectId);
+    const routed = route({ task: probe, mode: 'start', project, state: this.state, pool: this.deps.pool, config: this.config, now: this.now() });
+    if ('none' in routed) {
+      await this.fail(task, `${task.id} stopped without reporting done`, `${reason}. No other agent can take it at the ${next} tier (${routed.none}). /retry ${task.id} to try ${from} again, or /level ${task.id} <level>.`);
+      return;
+    }
+    if (next !== level && task.complexity?.by !== 'owner') this.classified(task, next, 'harness', `${reason}; moved up from ${level}`);
+    this.append({ type: 'task.reassigned', taskId: task.id, payload: { taskId: task.id, from, reason } });
+    this.setStatus(task, 'ready', `moved off ${from}: ${reason}`);
+    await this.notifyTask(task, { text: `↗️ ${task.id} moved off ${from} (${reason}). The next run is on the ${this.state.tasks.get(task.id)!.complexity?.level ?? next} tier${'agent' in routed ? ` (${routed.agent})` : ''}; the work so far stays in the worktree.`, priority: 'digest' });
+  }
+
+  /** The agent that owns a task's session is out of quota: wait for a reset that is close, else move the task. */
+  private async waitOrMove(task: TaskView, mode: RunMode, agent: string, blocked: string, until: number | undefined): Promise<void> {
+    const when = until ? resetText(Math.floor(until / 1000)) : 'later';
+    const soon = until !== undefined && until - this.now() < 30 * 60_000;
+    if (soon || task.pinnedAgent || mode === 'conflict') {
+      await this.noteWaiting(task, mode, `${agent}: ${blocked} until ${when}; ${task.id} continues in its session then`);
+      return;
+    }
+    const project = this.project(task.projectId);
+    const probe = { ...task, leftAgents: [...task.leftAgents, agent] };
+    const routed = route({ task: probe, mode: 'start', project, state: this.state, pool: this.deps.pool, config: this.config, now: this.now() });
+    if (!('agent' in routed)) {
+      await this.noteWaiting(task, mode, `${agent}: ${blocked} until ${when}, and no other agent can take its ${task.complexity?.level ?? 'medium'} work now`);
+      return;
+    }
+    const reason = `${agent}: ${blocked} until ${when}`;
+    this.append({ type: 'task.reassigned', taskId: task.id, payload: { taskId: task.id, from: agent, reason } });
+    if (task.status !== 'ready') this.setStatus(task, 'ready', `moved off ${agent}: ${reason}`);
+    await this.notifyTask(task, { text: `↗️ ${task.id} moved from ${agent} to ${routed.agent}: ${reason}. The work so far stays in the worktree.`, priority: 'digest' });
+  }
+
+  // ---------------------------------------------------------------- complexity
+
+  /** A task goes through the planner when one is configured (trivial tasks skip it) or it came by voice. */
+  private wantsPlan(task: TaskView): boolean {
+    if (task.source.kind === 'hyde-ai') {
+      // assistant-plans: Hyde AI already turned the request into a task; the hub does not plan it again.
+      if (this.config.routing.mode === 'assistant-plans') return false;
+      if (this.canPlan(task)) return true;
+    }
+    if (!this.config.planner.enabled) return false;
+    return !(task.complexity?.level === 'trivial' && task.complexity.confident);
+  }
+
+  /** Rules couldn't tell and no planner will: a cheap model decides. */
+  private wantsClassifier(task: TaskView): boolean {
+    return this.config.routing.classifier && task.complexity?.confident === false && !this.wantsPlan(task);
+  }
+
+  private classified(task: TaskView, level: Complexity, by: 'rules' | 'model' | 'planner' | 'client' | 'owner' | 'harness', reason: string, confident = true): void {
+    const c = task.complexity;
+    if (c && c.level === level && c.by === by && c.reason === reason && c.confident === confident) return;
+    this.append({ type: 'task.classified', taskId: task.id, payload: { taskId: task.id, level, by, reason, confident } });
+  }
+
+  /** First pass at creation: deterministic rules, with a client's hint settling what they can't. */
+  private classifyNew(task: TaskView): void {
+    const rules = classifyByRules(task.spec, task.size ? { size: task.size } : {});
+    if (task.complexity) return; // a planned subtask already has its level
+    if (!rules.confident && task.complexityHint) {
+      this.classified(task, task.complexityHint, 'client', `suggested by ${task.source.kind}; the rules were unsure (${rules.reason})`);
+      return;
+    }
+    this.classified(task, rules.level, 'rules', rules.reason, rules.confident);
+  }
+
+  private afterClassify(task: TaskView, runId: string): void {
+    if (task.status !== 'clarifying') return;
+    const run = this.state.runs.get(runId)!;
+    const result = parseClassification(run.structured);
+    const owner = task.complexity?.by === 'owner';
+    if (result && !owner) this.classified(task, result.level, 'model', `${run.agent}: ${result.reason || 'no reason given'}`);
+    else if (!owner) this.classified(task, task.complexity?.level ?? 'medium', 'harness', `classifier ${runId} gave no usable answer; kept the rules' guess`);
+    this.setStatus(task, 'ready', `complexity ${this.state.tasks.get(task.id)!.complexity!.level}`);
+  }
+
+  /**
+   * Model and effort for a run that continues an agent's own session. When the agent has no tier
+   * for the task's level any more (the owner raised it), it keeps its strongest tier and says so.
+   */
+  private sessionPlacement(task: TaskView, mode: RunMode, profile: HubConfig['agents'][number], quotaMax: number): RoutedRun {
+    const { job, level } = jobFor(task, mode);
+    const place = placeOn(profile, this.deps.pool.vendor(profile.name), job, level, this.config.routing);
+    const shift = effortShift(this.config.routing.effort, quotaMax);
+    if (!('no' in place)) {
+      const effort = shiftEffort(place.effort, shift, ADAPTER_MAX_EFFORT[profile.adapter] ?? 'high');
+      return { agent: profile.name, tier: place.tier, free: place.free, why: `${mode} in ${profile.name}'s session (${level} tier)`, ...(place.model && { model: place.model }), ...(effort && { effort }) };
+    }
+    const table = tierTable(profile);
+    const top = (['high', 'medium', 'low', 'trivial'] as const).find((l) => table[l])!;
+    const spec = table[top]!;
+    const model = spec.model ?? profile.model;
+    const effort = clampEffort(shiftEffort(spec.effort ?? profile.effort, shift), profile.adapter);
+    return { agent: profile.name, tier: top, free: false, why: `${mode} kept on ${profile.name}, which owns the session (${place.no})`, ...(model && { model }), ...(effort && { effort }) };
+  }
+
+  /** Records why a task can't start yet; tells the owner once per wait when it is about quota. */
+  private async noteWaiting(task: TaskView, mode: RunMode, reason: string): Promise<void> {
+    if (/ is busy$|all agents are busy/.test(reason)) return; // ordinary queueing
+    if (task.waiting === reason) return;
+    const first = task.waiting === undefined;
+    this.append({ type: 'task.waiting', taskId: task.id, payload: { taskId: task.id, reason } });
+    if (!first) return;
+    const { job, level } = jobFor(task, mode);
+    await this.notifyTask(task, {
+      text: `⏳ ${task.id} waits: ${reason}. Its ${job === 'code' ? `${level} work` : `${job} step`} needs that tier, so it is not moved to a weaker model. /level ${task.id} <level> changes the tier.`,
+      priority: 'digest',
+    });
+  }
+
+  // ---------------------------------------------------------------- checkpoints, comments, templates
+
+  /** Records the worktree before an agent turn: HEAD, plus a stash commit of uncommitted changes kept under refs/hyde. */
+  private async checkpoint(task: TaskView, runId: string, host: HostOps): Promise<void> {
+    if (!task.worktree) return;
+    try {
+      const head = await host.run(task.worktree, 'git rev-parse HEAD', 30_000);
+      if (!head.ok) return;
+      const stash = await host.run(task.worktree, 'git stash create', 30_000);
+      const sha = stash.ok ? stash.output.trim() : '';
+      if (sha) await host.run(task.worktree, `git update-ref ${JSON.stringify(`refs/hyde/checkpoints/${task.id}/${runId}`)} ${sha}`, 30_000);
+      this.append({ type: 'task.checkpoint', taskId: task.id, runId, payload: { taskId: task.id, runId, head: head.output.trim(), ...(sha && { stash: sha }) } });
+    } catch (err) {
+      this.log(`${task.id}: checkpoint failed: ${(err as Error).message}`);
+    }
+  }
+
+  /** `/undo T-n`: puts the worktree back to before the agent's last turn. */
+  private async undo(taskId: string, inbound: Inbound, actor: Actor): Promise<string> {
+    const task = this.state.tasks.get(taskId);
+    if (!task) return `No task ${taskId}.`;
+    if (this.runningFor(task.id)) return `${task.id} has a run in progress; /stop ${task.id} first.`;
+    if (task.prUrl) return `${task.id} already has a PR (${task.prUrl}); undo isn't possible after the push.`;
+    if (!['ready', 'blocked', 'failed', 'awaiting_merge', 'verifying', 'review'].includes(task.status)) return `${task.id} is ${task.status}; nothing to undo.`;
+    const cp = [...task.checkpoints].reverse().find((c) => !task.undone || c.seq < task.undone.seq || c.runId !== task.undone.runId);
+    if (!cp || !task.worktree) return `${task.id} has no checkpoint to go back to.`;
+    const host = this.deps.host(task.node ?? 'local');
+    const steps = [`git reset --hard ${cp.head}`, 'git clean -fd', ...(cp.stash ? [`git stash apply ${cp.stash}`] : [])];
+    for (const step of steps) {
+      const r = await host.run(task.worktree, step, 60_000);
+      if (!r.ok) return `Undo of ${task.id} stopped at \`${step}\`: ${r.output.slice(-300)}`;
+    }
+    this.deps.store.append({ type: 'task.undone', actor, taskId: task.id, commandId: inbound.commandId, payload: { taskId: task.id, runId: cp.runId, head: cp.head, by: inbound.userId } });
+    const t = this.state.tasks.get(task.id)!;
+    if (t.status !== 'ready' && canTransition(t.status, 'ready')) this.setStatus(t, 'ready', `undo by ${inbound.userId}: back to before ${cp.runId}`);
+    void this.tick();
+    return `${task.id} is back to before ${cp.runId} (${cp.head.slice(0, 7)}${cp.stash ? ' plus the uncommitted changes from then' : ''}). The agent is told and continues.`;
+  }
+
+  /** The owner's inline diff comment (dashboard). */
+  addComment(taskId: string, comment: { file: string; line?: number; text: string }, by: string): string {
+    const task = this.state.tasks.get(taskId);
+    if (!task) throw new Error(`No task ${taskId}.`);
+    const commentId = `C-${task.comments.length + 1}`;
+    this.deps.store.append({ type: 'task.comment_added', actor: { kind: 'user', id: by }, taskId, payload: { taskId, commentId, file: comment.file, text: comment.text, by, ...(comment.line !== undefined && { line: comment.line }) } });
+    return commentId;
+  }
+
+  /** "Send to agent": the open comments start a review_fix turn in the author's session. */
+  sendComments(taskId: string, by: string): string {
+    const task = this.state.tasks.get(taskId);
+    if (!task) throw new Error(`No task ${taskId}.`);
+    const open = task.comments.filter((c) => c.sentSeq === undefined);
+    if (!open.length) return `${task.id} has no unsent comments.`;
+    if (!task.sessionRef || !task.agent) return `${task.id} has no agent session to send them to yet.`;
+    if (this.runningFor(task.id)) return `${task.id} has a run in progress; send them when it ends.`;
+    this.deps.store.append({ type: 'task.comments_sent', actor: { kind: 'user', id: by }, taskId, payload: { taskId, commentIds: open.map((c) => c.id), by } });
+    const t = this.state.tasks.get(taskId)!;
+    if (t.status !== 'ready' && canTransition(t.status, 'ready')) this.setStatus(t, 'ready', `${open.length} review comment(s) from ${by}`);
+    void this.tick();
+    return `${open.length} comment(s) sent to ${task.agent}.`;
+  }
+
+  private runTemplate(command: { name?: string; args: string; project?: string; agent?: string }, inbound: Inbound): string {
+    const found = command.project ? this.findProject(command.project) : this.config.projects.length === 1 ? { project: this.config.projects[0]! } : {};
+    const projects = found.project ? [found.project] : this.config.projects;
+    const userDir = join(this.config.configDir, 'commands');
+    if (!command.name) {
+      const lines = projects.flatMap((p) => loadTemplates(p.path, userDir).map((t) => `/run ${t.name}${this.config.projects.length > 1 ? ` #${p.id}` : ''}: ${t.description}`));
+      return [...new Set(lines)].join('\n') || 'No task templates yet. Add .hyde/commands/<name>.md to a project (or ~/.hyde/commands/) with the task text; $ARGUMENTS is replaced.';
+    }
+    if (!found.project) return command.project ? `Unknown project #${command.project}.` : `Which project? Add #<project>.`;
+    const t = loadTemplates(found.project.path, userDir).find((x) => x.name === command.name);
+    if (!t) return `No template ${command.name} in #${found.project.id}. /commands lists them.`;
+    const text = expandTemplate(t, command.args);
+    return this.createTask(inbound, 'task', text, found.project.id, command.agent ?? t.agent, t.level).text;
+  }
+
+  // ---------------------------------------------------------------- todos and plan then build
+
+  private setTodos(task: TaskView, todos: { text: string; done: boolean }[], by: string): void {
+    this.append({ type: 'task.todos_updated', taskId: task.id, payload: { taskId: task.id, todos, by } });
+  }
+
+  /** Plan then build: the owner approves the plan before coding. On by default for high complexity. */
+  private planGate(task: TaskView): boolean {
+    return task.planGate ?? task.complexity?.level === 'high';
+  }
+
+  /** Files changed on the task branch (committed or not) with +/− line counts. */
+  async filesTouched(taskId: string): Promise<{ path: string; added: number; removed: number }[]> {
+    const task = this.state.tasks.get(taskId);
+    if (!task?.worktree) return [];
+    const host = this.deps.host(task.node ?? 'local');
+    const base = await this.baseRef(host, this.project(task.projectId).path, task.baseBranch!);
+    const r = await host.run(task.worktree, `git diff --numstat ${JSON.stringify(base)}`, 30_000);
+    if (!r.ok) return [];
+    return r.output
+      .split('\n')
+      .map((l) => /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(l.trim()))
+      .filter((m): m is RegExpExecArray => Boolean(m))
+      .map((m) => ({ path: m[3]!, added: m[1] === '-' ? 0 : Number(m[1]), removed: m[2] === '-' ? 0 : Number(m[2]) }));
+  }
+
+  // ---------------------------------------------------------------- skills
+
+  /** Where approved skills go: the user's skill folder next to the config (~/.hyde/skills). */
+  get userSkillsDir(): string {
+    return join(this.config.configDir, 'skills');
+  }
+
+  /** Every enabled skill for a project: project > linked folders > user > built-in. */
+  skills(project: ProjectConfig): Skill[] {
+    return discoverSkills({ user: this.userSkillsDir, project: join(project.path, '.hyde', 'skills'), folders: this.config.skills.folders }).filter(
+      (s) => !this.config.skills.disabled.includes(s.name),
+    );
+  }
+
+  /** A task's skills: its own list, its parent's, or every enabled skill. */
+  private taskSkills(task: TaskView, project: ProjectConfig): Skill[] {
+    const chosen = task.skills ?? (task.parentId ? this.state.tasks.get(task.parentId)?.skills : undefined);
+    const all = this.skills(project);
+    return chosen ? all.filter((s) => chosen.includes(s.name)) : all;
+  }
+
+  private setSkills(task: TaskView, skills: string[], by: string): void {
+    const clean = [...new Set(skills.map((s) => s.toLowerCase()).filter(isSkillName))].sort();
+    this.append({ type: 'task.skills_set', taskId: task.id, payload: { taskId: task.id, skills: clean, by } });
+  }
+
+  /** Copies the skills into the worktree for the CLI and keeps them out of commits (local info/exclude). */
+  private deliver(skills: Skill[], worktree: string, adapter: string): void {
+    try {
+      const written = deliverSkills(skills, worktree, adapter);
+      if (!written.length) return;
+      const gitFile = join(worktree, '.git');
+      // A worktree's .git file points at .git/worktrees/<name>; info/exclude lives in the common dir.
+      const gitDir = existsSync(gitFile) && !readFileSync(gitFile, 'utf8').startsWith('gitdir:') ? gitFile : resolve(worktree, readFileSync(gitFile, 'utf8').slice(8).trim(), '..', '..');
+      const file = join(gitDir, 'info', 'exclude');
+      mkdirSync(dirname(file), { recursive: true });
+      const next = withExcludes(existsSync(file) ? readFileSync(file, 'utf8') : '', written);
+      if (next !== null) writeFileSync(file, next);
+    } catch (err) {
+      this.log(`skills: could not deliver to ${worktree}: ${(err as Error).message}`);
+    }
+  }
+
+  private skillsCommand(command: { taskId?: string; add: string[]; remove: string[] }, inbound: Inbound, actor: Actor): string {
+    if (!command.taskId) {
+      const lines = this.config.projects.flatMap((p) => this.skills(p).map((s) => `${s.name} (${s.source}${this.config.projects.length > 1 ? `, #${p.id}` : ''}): ${s.description}`));
+      const proposed = [...this.state.skillProposals.values()].filter((s) => s.status === 'proposed').map((s) => `${s.id} proposed by ${s.by}: ${s.name}. /approve ${s.id} or /deny ${s.id}`);
+      return [...new Set(lines)].concat(proposed).join('\n') || 'No skills yet.';
+    }
+    const task = this.state.tasks.get(command.taskId);
+    if (!task) return `No task ${command.taskId}.`;
+    const available = this.skills(this.project(task.projectId)).map((s) => s.name);
+    const unknown = command.add.filter((n) => !available.includes(n));
+    if (unknown.length) return `Unknown skill(s): ${unknown.join(', ')}. Skills: ${available.join(', ') || 'none'}.`;
+    const current = this.taskSkills(task, this.project(task.projectId)).map((s) => s.name);
+    const next = [...new Set([...current.filter((n) => !command.remove.includes(n)), ...command.add])].sort();
+    this.deps.store.append({ type: 'task.skills_set', actor, taskId: task.id, commandId: inbound.commandId, payload: { taskId: task.id, skills: next, by: inbound.userId } });
+    return `${task.id} skills: ${next.join(', ') || 'none'}. The next run gets them.`;
+  }
+
+  private decideSkill(skillId: string, approved: boolean, inbound: Inbound, actor: Actor): string {
+    const s = this.state.skillProposals.get(skillId);
+    if (!s) return `No skill proposal ${skillId}.`;
+    if (s.status !== 'proposed') return `${s.id} was already ${s.status}.`;
+    const recorded = this.deps.store.append({ type: 'skill.decided', actor, commandId: inbound.commandId, ...(s.taskId && { taskId: s.taskId }), payload: { skillId, approved, by: inbound.userId } });
+    if (!recorded) return 'Already received.';
+    if (!approved) return `${s.id} discarded.`;
+    try {
+      const path = writeSkill(this.userSkillsDir, s);
+      this.append({ type: 'skill.written', payload: { skillId, path } });
+      return `${s.id} saved as skill ${s.name} in ${path}. Agents get it from the next run.`;
+    } catch (err) {
+      return `${s.id} approved but not saved: ${(err as Error).message}`;
+    }
+  }
+
+  /** Plan runs of this task that gave no usable plan (failed, unparsed or rejected). */
+  private failedPlanRuns(task: TaskView, stalledRun?: string): RunView[] {
+    return task.runIds
+      .map((id) => this.state.runs.get(id)!)
+      .filter((r) => r && r.mode === 'plan' && r.state === 'exited')
+      .filter((r) => r.id === stalledRun || r.failure !== undefined || r.structured === undefined || checkPlan(r.structured).errors.length > 0)
+      .filter((r) => !this.openBlockingFor(r.id) && ![...this.state.questions.values()].some((q) => q.runId === r.id));
+  }
+
+  /** Keeps a planner's raw output as an artifact so a failed plan can be read later. */
+  private savePlannerOutput(task: TaskView, run: RunView, why: string): void {
+    try {
+      const dir = join(this.config.dataDir, 'artifacts', task.id);
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, `${run.id}-planner-output.txt`);
+      writeFileSync(path, [`${run.id} on ${run.agent} (${run.model ?? 'unknown model'}): ${why}`, '', '--- final message ---', run.summary ?? '(none)', '', '--- last text ---', run.lastText ?? '(none)', '', '--- failure ---', run.failure ? `${run.failure.reason}: ${run.failure.detail ?? ''}` : '(none)', ''].join('\n'));
+      const artifactId = nextId(this.state, 'art');
+      this.append({ type: 'artifact.saved', taskId: task.id, runId: run.id, payload: { artifactId, taskId: task.id, runId: run.id, kind: 'log', path, label: `planner output of ${run.id} (${why.slice(0, 60)})` } });
+    } catch (err) {
+      this.log(`${task.id}: could not save planner output: ${(err as Error).message}`);
+    }
+  }
+
+  /** An open question the run is waiting for: one it asked as blocking, or an earlier one it was linked to. */
+  private openBlockingFor(runId: string): QuestionView | undefined {
+    return [...this.state.questions.values()].find(
+      (q) => q.status === 'open' && ((q.runId === runId && q.blocking) || q.matches.some((m) => m.runId === runId && m.blocking)),
+    );
+  }
+
+  /** Answered and open questions of a task, plus answered questions of the project's other tasks. */
+  private questionMemory(task: TaskView): { answers: QuestionView[]; open: QuestionView[]; decisions: QuestionView[] } {
+    const all = [...this.state.questions.values()];
+    const answers = all.filter((q) => questionOf(q, task.id) && q.status === 'answered');
+    const open = all.filter((q) => questionOf(q, task.id) && q.status === 'open');
+    const decisions = all
+      .filter((q) => q.status === 'answered' && !questionOf(q, task.id) && this.state.tasks.get(q.taskId)?.projectId === task.projectId)
+      .filter((q) => !answers.some((a) => a.text === q.text))
+      .slice(-10);
+    return { answers, open, decisions };
   }
 
   // ---------------------------------------------------------------- planning
@@ -596,23 +1050,25 @@ export class Orchestrator {
   private async afterPlan(task: TaskView, runId: string, live: LiveRun | undefined): Promise<void> {
     if (task.status !== 'clarifying') return;
     const run = this.state.runs.get(runId)!;
-    const asked = [...this.state.questions.values()].find((q) => q.runId === runId && q.blocking && q.status === 'open');
+    const asked = this.openBlockingFor(runId);
     if (asked && run.structured === undefined) {
       this.setStatus(task, 'blocked', `planner waiting for ${asked.id}`, { kind: 'question', id: asked.id });
       return;
     }
-    const planRuns = task.runIds.filter((id) => this.state.runs.get(id)?.mode === 'plan').length;
+    const failed = this.failedPlanRuns(task, live?.stalled ? runId : undefined).length;
     if (run.failure || live?.stalled || run.structured === undefined) {
-      if (planRuns >= 2) {
+      this.savePlannerOutput(task, run, live?.stalled ? 'stalled' : run.failure ? `${run.failure.reason}: ${run.failure.detail ?? ''}` : 'no JSON plan in the output');
+      if (failed >= 2) {
         this.setStatus(task, 'ready', 'planner failed twice; running the task as one unit');
         return;
       }
-      this.retryAt.set(task.id, this.now() + retryDelayMs(planRuns));
+      this.retryAt.set(task.id, this.now() + retryDelayMs(failed));
       return;
     }
     const check = checkPlan(run.structured);
     if (check.errors.length) {
-      if (planRuns >= 2) {
+      this.savePlannerOutput(task, run, `plan rejected: ${check.errors.join('; ')}`);
+      if (failed >= 2) {
         this.setStatus(task, 'ready', `plan rejected (${check.errors[0]}); running the task as one unit`);
         return;
       }
@@ -621,10 +1077,37 @@ export class Orchestrator {
       return;
     }
     const { plan } = check;
+    if (plan.complexity && task.complexity?.by !== 'owner') {
+      this.classified(task, plan.complexity, 'planner', plan.complexityReason || `planned by ${run.agent}`);
+    }
 
-    // Questions first (devflow rule 4: never assume).
+    // Only blocking questions are asked, up to the cap; everything else becomes a stated assumption.
+    const max = this.config.planner.maxQuestions;
+    const blocking = plan.questions.filter((q) => q.blocking);
+    const assumptions: string[] = [
+      ...plan.assumptions,
+      ...plan.questions.filter((q) => !q.blocking).map((q) => `Left to the agent (not blocking): ${q.text}`),
+      ...blocking.slice(max).map((q) => `Over the question limit, decide sensibly: ${q.text}`),
+    ];
+    const questions = blocking.slice(0, max);
+
+    // Questions first (devflow rule 4: never assume, but ask only what blocks the work).
     let firstBlocking: string | undefined;
-    for (const q of plan.questions) {
+    for (const q of questions) {
+      // Never ask twice: an answered match becomes an assumption, an open one is linked.
+      const match = findMatch(this.state, task, q.text);
+      if (match) {
+        const m = match.question;
+        this.append({
+          type: 'question.matched',
+          taskId: task.id,
+          runId,
+          payload: { questionId: m.id, taskId: task.id, runId, text: q.text, status: m.status, score: match.score, by: `planner ${run.agent}`, blocking: q.blocking && m.status === 'open' },
+        });
+        if (m.status === 'answered') assumptions.push(`Answered before as ${m.id}: ${m.text} → ${m.answer}`);
+        else if (q.blocking && !firstBlocking) firstBlocking = m.id;
+        continue;
+      }
       const questionId = nextId(this.state, 'Q');
       this.append({
         type: 'question.asked',
@@ -636,8 +1119,9 @@ export class Orchestrator {
       if (q.blocking && !firstBlocking) firstBlocking = questionId;
     }
     if (firstBlocking) {
-      // Planned again once every blocking question has an answer.
+      // Planned again once every blocking question has an answer. The owner sees the assumptions now.
       this.setStatus(task, 'blocked', `planner waiting for ${firstBlocking}`, { kind: 'question', id: firstBlocking });
+      if (assumptions.length) await this.notifyAssumptions(task, assumptions);
       return;
     }
 
@@ -650,10 +1134,26 @@ export class Orchestrator {
           taskId: task.id,
           runId,
           children: [],
+          assumptions,
           ...(only && { doneWhen: only.doneWhen, writeScope: only.writeScope, role: only.role, size: only.size }),
         },
       });
+      if (only?.complexity && !plan.complexity && task.complexity?.by !== 'owner') this.classified(task, only.complexity, 'planner', `planned by ${run.agent}`);
+      if (only?.skills && task.skills === undefined) this.setSkills(task, only.skills, `planner ${run.agent}`);
+      if (only?.steps.length) this.setTodos(task, only.steps.map((text) => ({ text, done: false })), `planner ${run.agent}`);
+      if (this.planGate(this.state.tasks.get(task.id)!)) {
+        const steps = only?.steps.length ? only.steps.map((s, i) => `${i + 1}. ${s}`).join('\n') : (only?.doneWhen ?? task.title);
+        const approvalId = this.requestApproval(task, 'plan', `Plan for ${task.id} (plan then build)`);
+        this.setStatus(task, 'blocked', `waiting for ${approvalId} (plan then build)`, { kind: 'approval', id: approvalId });
+        await this.notifyTask(task, {
+          text: `📋 Plan for ${task.id} (${task.title}), ${this.state.tasks.get(task.id)!.complexity?.level ?? 'medium'}:\n${steps}${only?.doneWhen ? `\nDone when: ${only.doneWhen}` : ''}\n\n${approvalId}: build it?`,
+          buttons: [[{ label: 'Build it', action: { kind: 'decide', approvalId, approved: true } }, { label: 'Cancel', action: { kind: 'decide', approvalId, approved: false } }]],
+        });
+        if (assumptions.length) await this.notifyAssumptions(task, assumptions);
+        return;
+      }
       this.setStatus(task, 'ready', 'planned as one task');
+      if (assumptions.length) await this.notifyAssumptions(task, assumptions);
       return;
     }
 
@@ -679,13 +1179,22 @@ export class Orchestrator {
           role: t.role,
           dependsOn: t.dependsOn.map((k) => ids.get(k)!),
           size: t.size,
+          ...(t.complexity && { complexity: t.complexity }),
           ...(task.pinnedAgent && { agent: task.pinnedAgent }),
         },
       });
     }
-    this.append({ type: 'task.planned', taskId: task.id, payload: { taskId: task.id, runId, children: [...ids.values()] } });
-    const summary = plan.tasks.map((t) => `${ids.get(t.key)} [${t.size}] ${t.title}${t.dependsOn.length ? ` (after ${t.dependsOn.map((k) => ids.get(k)).join(', ')})` : ''}`).join('\n');
-    if (plan.tasks.length > this.config.planner.approvalOver || plan.tasks.some((t) => t.size === 'L')) {
+    this.append({ type: 'task.planned', taskId: task.id, payload: { taskId: task.id, runId, children: [...ids.values()], assumptions } });
+    for (const t of plan.tasks) if (t.skills) this.setSkills(this.state.tasks.get(ids.get(t.key)!)!, t.skills, `planner ${run.agent}`);
+    for (const t of plan.tasks) if (t.steps.length) this.setTodos(this.state.tasks.get(ids.get(t.key)!)!, t.steps.map((text) => ({ text, done: false })), `planner ${run.agent}`);
+    this.setTodos(task, plan.tasks.map((t) => ({ text: `${ids.get(t.key)}: ${t.title}`, done: false })), `planner ${run.agent}`);
+    for (const id of ids.values()) {
+      const child = this.state.tasks.get(id)!;
+      if (!child.complexity) this.classifyNew(child);
+    }
+    if (assumptions.length) await this.notifyAssumptions(task, assumptions);
+    const summary = plan.tasks.map((t) => `${ids.get(t.key)} [${t.size}${t.complexity ? `, ${t.complexity}` : ''}] ${t.title}${t.dependsOn.length ? ` (after ${t.dependsOn.map((k) => ids.get(k)).join(', ')})` : ''}`).join('\n');
+    if (plan.tasks.length > this.config.planner.approvalOver || plan.tasks.some((t) => t.size === 'L') || this.planGate(this.state.tasks.get(task.id)!)) {
       const approvalId = this.requestApproval(task, 'plan', `Plan for ${task.id}: ${plan.tasks.length} subtasks`);
       this.setStatus(task, 'blocked', `waiting for ${approvalId}`, { kind: 'approval', id: approvalId });
       await this.notifyTask(task, {
@@ -773,7 +1282,15 @@ export class Orchestrator {
             this.busy.delete(taskId);
             const started = await this.dispatch(task, 'review', {
               author: task.agent!,
-              prompt: reviewPrompt({ title: task.title, spec: task.spec, ...(task.doneWhen && { doneWhen: task.doneWhen }), diff, client: task.kind === 'client' }),
+              prompt: reviewPrompt({
+                title: task.title,
+                spec: task.spec,
+                ...(task.doneWhen && { doneWhen: task.doneWhen }),
+                diff,
+                client: task.kind === 'client',
+                answers: [...this.questionMemory(task).answers, ...this.questionMemory(task).decisions].map((q) => ({ q: q.text, a: q.answer! })),
+                assumptions: task.assumptions,
+              }),
             });
             if (started) return;
             this.busy.add(taskId);
@@ -1036,7 +1553,7 @@ export class Orchestrator {
         return this.config.projects.map((p) => `#${p.id}: ${p.path} (base ${p.baseBranch}, release ${p.releaseBranch})`).join('\n');
       case 'new':
       case 'client':
-        return this.createTask(inbound, command.kind === 'client' ? 'client' : 'task', command.text, command.project, command.kind === 'new' ? command.agent : undefined);
+        return this.createTask(inbound, command.kind === 'client' ? 'client' : 'task', command.text, command.project, command.kind === 'new' ? command.agent : undefined).text;
       case 'status':
         return this.statusText();
       case 'agents':
@@ -1068,6 +1585,54 @@ export class Orchestrator {
         void this.tick();
         return `${task.id} will run again.`;
       }
+      case 'skills':
+        return this.skillsCommand(command, inbound, actor);
+      case 'undo':
+        return this.undo(command.taskId, inbound, actor);
+      case 'template':
+        return this.runTemplate(command, inbound);
+      case 'todos': {
+        const task = this.state.tasks.get(command.taskId);
+        if (!task) return `No task ${command.taskId}.`;
+        return task.todos.length ? `${task.id} checklist (${task.todos.filter((t) => t.done).length}/${task.todos.length}):\n${task.todos.map((t) => `${t.done ? '☑' : '☐'} ${t.text}`).join('\n')}` : `${task.id} has no checklist yet.`;
+      }
+      case 'plan': {
+        const task = this.state.tasks.get(command.taskId);
+        if (!task) return `No task ${command.taskId}.`;
+        if (command.on !== undefined) {
+          this.deps.store.append({ type: 'task.plan_gate_set', actor, taskId: task.id, commandId: inbound.commandId, payload: { taskId: task.id, on: command.on, by: inbound.userId } });
+          return `${task.id}: plan then build is ${command.on ? 'on: you approve the plan before any code is written' : 'off'}.`;
+        }
+        const open = [...this.state.approvals.values()].find((a) => a.taskId === task.id && a.kind === 'plan' && a.status === 'open');
+        return [
+          `${task.id}: ${task.title} (${task.complexity?.level ?? 'unrated'}${this.planGate(task) ? ', plan then build' : ''})`,
+          task.doneWhen ? `Done when: ${task.doneWhen}` : '',
+          ...task.todos.map((t, i) => `${i + 1}. ${t.done ? '☑ ' : ''}${t.text}`),
+          ...task.children.map((id) => `${id}: ${this.state.tasks.get(id)?.title ?? ''}`),
+          ...task.assumptions.map((a) => `Assumed: ${a}`),
+          open ? `${open.id}: /approve ${open.id} to build, /deny ${open.id} to cancel.` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      }
+      case 'skill':
+        return this.decideSkill(command.skillId, command.approved, inbound, actor);
+      case 'level': {
+        const task = this.state.tasks.get(command.taskId);
+        if (!task) return `No task ${command.taskId}.`;
+        if (TERMINAL_STATUSES.includes(task.status)) return `${task.id} is ${task.status}.`;
+        const before = task.complexity?.level;
+        this.deps.store.append({
+          type: 'task.classified',
+          actor,
+          taskId: task.id,
+          commandId: inbound.commandId,
+          payload: { taskId: task.id, level: command.level, by: 'owner', reason: `set by ${inbound.userId}${before ? ` (was ${before})` : ''}`, confident: true },
+        });
+        if (task.status === 'clarifying' && !this.wantsPlan(task) && !this.runningFor(task.id)) this.setStatus(task, 'ready', `complexity set to ${command.level} by the owner`);
+        void this.tick();
+        return `${task.id} is now ${command.level}${before && before !== command.level ? ` (was ${before})` : ''}. Its next run uses the ${command.level} tier.`;
+      }
       case 'answer':
         return this.answer(command.questionId, command.text, inbound, actor);
       case 'decide':
@@ -1093,15 +1658,45 @@ export class Orchestrator {
     }
   }
 
-  private createTask(inbound: Inbound, kind: 'task' | 'client', text: string, projectTag?: string, agent?: string): string {
+  /**
+   * Creates a task and says what happened, for callers that need the id rather than a chat reply
+   * (POST /api/tasks). `text` is the same reply the chat command gives.
+   */
+  submitTask(inbound: Inbound & { command: { kind: 'new' } }): TaskSubmission {
+    const { command } = inbound;
+    return this.createTask(inbound, 'task', command.text, command.project, command.agent, command.complexity);
+  }
+
+  /**
+   * Finds a project by its id, or loosely by id or name: case, spaces, dashes, dots and
+   * underscores are ignored, so "Gamify IAS LMS", "gamify-ias-lms" and "gamifyiaslms" all match.
+   */
+  findProject(tag: string): { project?: ProjectConfig; ambiguous?: ProjectConfig[] } {
     const projects = this.config.projects;
-    const project = projectTag ? projects.find((p) => p.id === projectTag) : projects.length === 1 ? projects[0] : undefined;
+    const exact = projects.find((p) => p.id === tag);
+    if (exact) return { project: exact };
+    const key = projectKey(tag);
+    if (!key) return {};
+    const loose = projects.filter((p) => projectKey(p.id) === key || (p.name !== undefined && projectKey(p.name) === key));
+    return loose.length === 1 ? { project: loose[0]! } : loose.length > 1 ? { ambiguous: loose } : {};
+  }
+
+  private createTask(inbound: Inbound, kind: 'task' | 'client', text: string, projectTag?: string, agent?: string, complexityHint?: Complexity): TaskSubmission {
+    const projects = this.config.projects;
+    const found = projectTag ? this.findProject(projectTag) : projects.length === 1 ? { project: projects[0]! } : {};
+    const project = found.project;
     if (!project) {
-      return projectTag
-        ? `Unknown project #${projectTag}. Projects: ${projects.map((p) => `#${p.id}`).join(', ')}`
-        : `Which project? Add one of: ${projects.map((p) => `#${p.id}`).join(', ')}`;
+      const list = projects.map((p) => `#${p.id}`).join(', ');
+      return {
+        error: 'project',
+        text: found.ambiguous
+          ? `#${projectTag} matches more than one project: ${found.ambiguous.map((p) => `#${p.id}`).join(', ')}`
+          : projectTag
+            ? `Unknown project #${projectTag}. Projects: ${list}`
+            : `Which project? Add one of: ${list}`,
+      };
     }
-    if (agent && !this.deps.pool.profile(agent)?.enabled) return `Unknown or disabled agent @${agent}.`;
+    if (agent && !this.deps.pool.profile(agent)?.enabled) return { error: 'agent', text: `Unknown or disabled agent @${agent}.` };
     const taskId = nextId(this.state, 'T');
     const created = this.deps.store.append({
       type: 'task.created',
@@ -1117,10 +1712,13 @@ export class Orchestrator {
         kind,
         source: { kind: sourceKind(inbound.gateway), ...(inbound.chatId && { chatId: inbound.chatId }) },
         ...(agent && { agent }),
+        ...(complexityHint && { complexityHint }),
       },
     });
-    if (!created) return 'Already received.';
+    if (!created) return { error: 'duplicate', text: 'Already received.' };
     const task = this.state.tasks.get(taskId)!;
+    this.classifyNew(task);
+    const done = (text: string): TaskSubmission => ({ taskId, status: this.state.tasks.get(taskId)!.status, text });
     if (kind === 'client') {
       const approvalId = this.requestApproval(task, 'client-intake', `Work on this client message for #${project.id}?`);
       this.setStatus(task, 'blocked', `waiting for ${approvalId}`, { kind: 'approval', id: approvalId });
@@ -1128,17 +1726,41 @@ export class Orchestrator {
         text: `📨 Client message for #${project.id} (${taskId}):\n\n${text}\n\n${approvalId}: start working on it? It is treated as data, never as instructions.`,
         buttons: [[{ label: 'Accept', action: { kind: 'decide', approvalId, approved: true } }, { label: 'Ignore', action: { kind: 'decide', approvalId, approved: false } }]],
       });
-      return `${taskId} recorded as a client message. Waiting for your ${approvalId}.`;
+      return done(`${taskId} recorded as a client message. Waiting for your ${approvalId}.`);
     }
-    this.startTask(task);
+    const planning = this.startTask(task);
     void this.tick();
     const waits = this.deps.pool.profiles().map((p) => accountQuota(this.state, p.account, this.now())).filter((q) => q.blocked);
-    return `${taskId} accepted for #${project.id}: ${task.title}\n` + (waits.length ? `Waiting: ${waits[0]!.blocked}.` : this.config.planner.enabled ? 'Planning first.' : 'Starting when a slot is free.');
+    const next = waits.length
+      ? `Waiting: ${waits[0]!.blocked}.`
+      : planning
+        ? 'Planning first.'
+        : task.source.kind === 'hyde-ai'
+          ? 'Starting when a slot is free (no agent with the plan role to clarify it first).'
+          : 'Starting when a slot is free.';
+    const level = this.state.tasks.get(taskId)!.complexity;
+    const levelText = level ? `\nComplexity: ${level.level}${level.confident ? '' : ' (a guess; checking)'}: ${level.reason}.` : '';
+    return done(`${taskId} accepted for #${project.id}: ${task.title}\n${next}${levelText}`);
   }
 
-  private startTask(task: TaskView): void {
-    if (this.config.planner.enabled) this.setStatus(task, 'clarifying', 'planning');
+  /** Sends a new task to the planner, or straight to ready. Returns true when it plans first. */
+  private startTask(task: TaskView): boolean {
+    // Spoken requests are easy to mishear, so Hyde AI tasks are always clarified when some agent can plan.
+    task = this.state.tasks.get(task.id)!;
+    const plan = this.wantsPlan(task);
+    if (plan) this.setStatus(task, 'clarifying', this.config.planner.enabled ? 'planning' : 'planning (voice request: clarify first)');
+    else if (this.wantsClassifier(task)) this.setStatus(task, 'clarifying', 'checking complexity with a cheap model');
+    else if (this.config.planner.enabled) this.setStatus(task, 'ready', 'trivial: no planning needed');
     else this.setStatus(task, 'ready', 'no planner configured');
+    return plan;
+  }
+
+  /** An enabled, usable agent with the plan role may work on this task. */
+  private canPlan(task: TaskView): boolean {
+    const project = this.config.projects.find((p) => p.id === task.projectId);
+    return this.deps.pool
+      .profiles()
+      .some((p) => p.roles.includes('plan') && this.deps.pool.usable(p.name) && (!project?.agents || project.agents.includes(p.name)) && (!task.pinnedAgent || p.name === task.pinnedAgent));
   }
 
   private answer(questionId: string, text: string, inbound: Inbound, actor: Actor): string {
@@ -1156,20 +1778,22 @@ export class Orchestrator {
       payload: { questionId: q.id, answer, by: inbound.userId },
     });
     if (!recorded) return 'Already received.';
-    const task = this.state.tasks.get(q.taskId);
-    if (task?.status === 'blocked' && task.blockedBy?.id === q.id) {
-      const planRun = this.state.runs.get(q.runId)?.mode === 'plan';
-      if (planRun) {
+    // The question may block several tasks: its own and any whose agent asked the same thing.
+    const waiting = [...this.state.tasks.values()].filter((t) => t.status === 'blocked' && t.blockedBy?.id === q.id);
+    for (const task of waiting) {
+      const runId = q.taskId === task.id ? q.runId : (q.matches.findLast((m) => m.taskId === task.id)?.runId ?? q.runId);
+      if (this.state.runs.get(runId)?.mode === 'plan') {
         // Re-plan once every blocking planner question is answered.
-        const stillOpen = [...this.state.questions.values()].find((x) => x.runId === q.runId && x.blocking && x.status === 'open');
+        const stillOpen = this.openBlockingFor(runId);
         if (stillOpen) this.setStatus(task, 'blocked', `planner waiting for ${stillOpen.id}`, { kind: 'question', id: stillOpen.id });
         else this.setStatus(task, 'clarifying', `${q.id} answered; planning again`);
       } else {
         this.setStatus(task, 'ready', `${q.id} answered`);
       }
-      void this.tick();
     }
-    return `${q.id} answered: ${answer}`;
+    if (waiting.length) void this.tick();
+    const linked = new Set(q.matches.map((m) => m.taskId).filter((id) => id !== q.taskId));
+    return `${q.id} answered: ${answer}${linked.size ? ` (also sent to ${[...linked].join(', ')}, which asked the same)` : ''}`;
   }
 
   private decideApproval(approvalId: string, approved: boolean, inbound: Inbound, actor: Actor): string {
@@ -1202,6 +1826,12 @@ export class Orchestrator {
           this.setStatus(task, 'cancelled', `${a.id} denied`);
           return `${a.id} denied; ${task.id} and its subtasks are cancelled.`;
         }
+        if (!task.children.length) {
+          // Plan then build: the build run starts now.
+          this.setStatus(task, 'ready', `${a.id} approved: build`);
+          void this.tick();
+          return `${a.id} approved. Building ${task.id}.`;
+        }
         this.setStatus(task, 'running', `${a.id} approved`);
         void this.tick();
         return `${a.id} approved. Starting ${task.children.join(', ')}.`;
@@ -1210,9 +1840,9 @@ export class Orchestrator {
           this.setStatus(task, 'cancelled', 'client message ignored');
           return `${task.id} ignored.`;
         }
-        this.setStatus(task, this.config.planner.enabled ? 'clarifying' : 'ready', 'client message accepted');
+        this.setStatus(task, this.wantsPlan(task) || this.wantsClassifier(task) ? 'clarifying' : 'ready', 'client message accepted');
         void this.tick();
-        return `${task.id} accepted. ${this.config.planner.enabled ? 'Planning first.' : 'Starting when a slot is free.'}`;
+        return `${task.id} accepted. ${this.wantsPlan(task) ? 'Planning first.' : 'Starting when a slot is free.'}`;
       case 'promote':
         if (!approved) return `${a.id} denied; nothing was released.`;
         void this.finishPromote(a.data ?? {}, task);
@@ -1313,7 +1943,13 @@ export class Orchestrator {
       const running = [...this.state.runs.values()].filter((r) => r.agent === p.name && r.state === 'running');
       const q = accountQuota(this.state, p.account, this.now());
       const state = !p.enabled ? 'disabled' : h && (!h.installed || !h.signedIn) ? `unavailable: ${h.problem ?? 'not signed in'}` : running.length ? `working on ${running.map((r) => r.taskId).join(', ')}` : 'idle';
-      lines.push(`${p.name} · ${p.adapter} (${this.deps.pool.vendor(p.name)})${p.model ? ` · ${p.model}` : ''} · ${state} · quota ${Math.round(q.max * 100)}%`);
+      const table = tierTable(p);
+      const tiers = (['high', 'medium', 'low', 'trivial'] as const)
+        .filter((l) => table[l])
+        .map((l) => `${l} ${table[l]!.model ?? p.model ?? 'default'}${table[l]!.effort ? `/${table[l]!.effort}` : ''}`)
+        .join(', ');
+      const note = !p.tiers && p.model && table.high?.model && table.high.model !== p.model ? ` (built-in tiers; "model": "${p.model}" is not used, add "tiers" to change)` : '';
+      lines.push(`${p.name} · ${p.adapter} (${this.deps.pool.vendor(p.name)}) · tiers: ${tiers}${note} · ${state} · quota ${Math.round(q.max * 100)}%`);
     }
     return lines.join('\n');
   }
@@ -1350,14 +1986,33 @@ export class Orchestrator {
     const run = this.state.runs.get(runId)!;
     const task = this.state.tasks.get(run.taskId)!;
     const actor: Actor = { kind: 'agent', id: run.agent };
-    const readOnly = run.mode === 'plan' || run.mode === 'review';
+    const readOnly = READ_ONLY_MODES.includes(run.mode);
     switch (tool) {
       case 'ask_question': {
-        const questionId = nextId(this.state, 'Q');
         const blocking = args.blocking !== false;
         const options = Array.isArray(args.options) ? (args.options as string[]).slice(0, 4) : [];
         const assumption = typeof args.assumption === 'string' ? args.assumption : '';
         const text = String(args.question);
+        // Question memory: any agent, any run of this task, or a close match elsewhere in the project.
+        const match = findMatch(this.state, task, text);
+        if (match) {
+          const m = match.question;
+          this.deps.store.append({
+            type: 'question.matched',
+            actor,
+            taskId: task.id,
+            runId,
+            payload: { questionId: m.id, taskId: task.id, runId, text, status: m.status, score: match.score, by: run.agent, blocking: blocking && m.status === 'open' },
+          });
+          const where = m.taskId === task.id ? '' : ` on ${m.taskId}`;
+          if (m.status === 'answered') {
+            return `The owner already answered this as ${m.id}${where}: "${m.text}" → ${m.answer}\nUse that answer and continue. Do not ask it again.`;
+          }
+          return blocking
+            ? `This was already asked as ${m.id}${where} ("${m.text}") and is waiting for the owner. End your turn now; you will be resumed in this session with the answer.`
+            : `This was already asked as ${m.id}${where} and is not answered yet. Continue with your stated assumption.`;
+        }
+        const questionId = nextId(this.state, 'Q');
         this.deps.store.append({
           type: 'question.asked',
           actor,
@@ -1402,6 +2057,29 @@ export class Orchestrator {
         await this.notifyApproval(task, approvalId, `${run.agent} asks (${kind}): ${summary}${args.command ? `\n$ ${args.command}` : ''}`);
         return `Recorded as ${approvalId} and sent to the owner. End your turn now; you will be resumed with the decision.`;
       }
+      case 'update_todos': {
+        const todos = Array.isArray(args.todos)
+          ? (args.todos as { text?: unknown; done?: unknown }[]).slice(0, 30).map((t) => ({ text: String(t.text ?? '').slice(0, 200), done: t.done === true })).filter((t) => t.text)
+          : [];
+        if (!todos.length) throw new Error('todos must be a non-empty list of {text, done}');
+        this.deps.store.append({ type: 'task.todos_updated', actor, taskId: task.id, runId, payload: { taskId: task.id, todos, by: run.agent } });
+        return `Checklist saved (${todos.filter((t) => t.done).length}/${todos.length} done).`;
+      }
+      case 'propose_skill': {
+        const name = String(args.name ?? '').trim().toLowerCase();
+        const description = String(args.description ?? '').replace(/\s+/g, ' ').trim();
+        const body = String(args.body ?? '').trim();
+        if (!isSkillName(name)) throw new Error('name must be lower-case letters, digits and dashes (e.g. "run-e2e-tests")');
+        if (description.length < 10 || body.length < 20) throw new Error('give a description (when to use it) and a body (the steps)');
+        if (this.skills(this.project(task.projectId)).some((s) => s.name === name)) return `A skill named ${name} already exists; propose a different name or a lesson instead.`;
+        const skillId = nextId(this.state, 'S');
+        this.deps.store.append({ type: 'skill.proposed', actor, taskId: task.id, payload: { skillId, taskId: task.id, name, description, body, by: run.agent } });
+        await this.notifyTask(task, {
+          text: `🧩 ${skillId} skill proposed by ${run.agent}: ${name}\n${description}\n\n/approve ${skillId} saves it to your skills; /deny ${skillId} drops it.`,
+          buttons: [[{ label: 'Save skill', action: { kind: 'skill', skillId, approved: true } }, { label: 'Discard', action: { kind: 'skill', skillId, approved: false } }]],
+        });
+        return `Recorded as ${skillId}; the owner decides whether it becomes a skill.`;
+      }
       case 'propose_lesson': {
         const lessonId = nextId(this.state, 'L');
         const text = String(args.text).replace(/\s+/g, ' ').trim();
@@ -1414,6 +2092,102 @@ export class Orchestrator {
       }
       default:
         throw new Error(`Unknown tool ${tool}`);
+    }
+  }
+
+  // ================================================================ live browser (run token)
+
+  /** Runs that get the live browser tools: per config, ui tasks and projects with a preview by default. */
+  private wantsBrowser(task: TaskView, project: ProjectConfig): boolean {
+    const mode = this.config.browser.live;
+    return mode === 'always' || (mode === 'ui' && (task.role === 'ui' || Boolean(project.preview)));
+  }
+
+  /**
+   * Calls from the browser tools in the agent's MCP server. `before` may hold the step (paused)
+   * or refuse it (needs approval); `after` logs it with a keyframe; `frame` feeds the live view.
+   */
+  async browserCall(runId: string, op: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const run = this.state.runs.get(runId)!;
+    const task = this.state.tasks.get(run.taskId)!;
+    const project = (await this.workflow(this.project(task.projectId))).project;
+    switch (op) {
+      case 'before': {
+        if (!(await this.browserLive.waitWhilePaused(task.id, 5 * 60_000, this.now))) {
+          return { allowed: false, message: 'The owner paused the browser and has not resumed it. End your turn with a short note; you will be resumed later.' };
+        }
+        const url = String(body.url ?? '');
+        const kind = String(body.op ?? '') as Parameters<typeof needsApproval>[0];
+        if (needsApproval(kind, url, project.browserAllow)) {
+          const host = new URL(url).hostname;
+          const ok = [...this.state.approvals.values()].some((a) => a.taskId === task.id && a.status === 'approved' && a.data?.browserHost === host);
+          if (!ok) {
+            const open = [...this.state.approvals.values()].find((a) => a.taskId === task.id && a.status === 'open' && a.data?.browserHost === host);
+            const approvalId = open?.id ?? this.requestApproval(task, 'destructive', `${run.agent} wants to click and type on ${host} (not a local site)`, { browserHost: host });
+            if (!open) await this.notifyApproval(task, approvalId, `${run.agent} wants to act on ${host} in the live browser: ${String(body.label ?? kind)}. Approve to allow clicks and typing on ${host} for this task.`);
+            return { allowed: false, message: `Acting on ${host} needs the owner's approval (${approvalId}). End your turn now; you will be resumed with the decision.` };
+          }
+        }
+        return { allowed: true, notes: this.browserLive.drainNotes(task.id) };
+      }
+      case 'after': {
+        const step = task.browserSteps + 1;
+        let artifactId: string | undefined;
+        if (typeof body.keyframe === 'string' && body.keyframe) {
+          const dir = join(this.config.dataDir, 'artifacts', task.id, 'browser');
+          mkdirSync(dir, { recursive: true });
+          const path = join(dir, `${runId}-step-${step}.jpg`);
+          writeFileSync(path, Buffer.from(body.keyframe, 'base64'));
+          artifactId = nextId(this.state, 'art');
+          this.append({ type: 'artifact.saved', taskId: task.id, runId, payload: { artifactId, taskId: task.id, runId, kind: 'screenshot', path, label: `browser step ${step}: ${String(body.label ?? '')}`.slice(0, 120) } });
+        }
+        const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+        const box = body.box && typeof body.box === 'object' ? (body.box as { x: number; y: number; width: number; height: number }) : undefined;
+        const viewport = (body.viewport as { width: number; height: number }) ?? { width: 0, height: 0 };
+        const payload = {
+          taskId: task.id,
+          runId,
+          step,
+          op: String(body.op ?? ''),
+          label: String(body.label ?? '').slice(0, 200),
+          url: String(body.url ?? ''),
+          ok: body.ok !== false,
+          viewport,
+          ...(typeof body.error === 'string' && { error: body.error.slice(0, 300) }),
+          ...(typeof body.text === 'string' && { text: body.text.slice(0, 200) }),
+          ...(box && { box }),
+          ...(num(body.x) !== undefined && { x: num(body.x)! }),
+          ...(num(body.y) !== undefined && { y: num(body.y)! }),
+          ...(artifactId && { artifactId }),
+        };
+        this.append({ type: 'browser.action', taskId: task.id, runId, payload });
+        this.browserLive.publish(task.id, { type: 'action', ...payload, ts: this.now() });
+        return { ok: true };
+      }
+      case 'frame': {
+        this.browserLive.publish(task.id, { type: 'frame', jpeg: String(body.jpeg ?? ''), width: Number(body.width) || 0, height: Number(body.height) || 0, url: String(body.url ?? ''), ts: this.now() });
+        return { commands: this.browserLive.drainCommands(task.id) };
+      }
+      case 'video': {
+        const from = String(body.path ?? '');
+        if (!from.endsWith('.webm') || !existsSync(from)) return { ok: false };
+        const dir = join(this.config.dataDir, 'artifacts', task.id, 'browser');
+        mkdirSync(dir, { recursive: true });
+        const path = join(dir, `${runId}-session.webm`);
+        copyFileSync(from, path);
+        // The browser recorded into its own temp folder; remove it with the file.
+        rmSync(/hyde-browser-video-/.test(dirname(from)) ? dirname(from) : from, { recursive: true, force: true });
+        const artifactId = nextId(this.state, 'art');
+        this.append({ type: 'artifact.saved', taskId: task.id, runId, payload: { artifactId, taskId: task.id, runId, kind: 'video', path, label: `browser session (${run.agent}, ${runId})` } });
+        return { ok: true };
+      }
+      case 'preview': {
+        if (!project.preview) throw new Error(`#${project.id} has no preview command; set "preview" in the project config or WORKFLOW.md`);
+        if (!task.worktree) throw new Error('this task has no worktree yet');
+        return { url: await this.browserLive.preview(task.id, task.worktree, project.preview.command, project.preview.url) };
+      }
+      default:
+        throw new Error(`unknown browser call ${op}`);
     }
   }
 
@@ -1483,6 +2257,7 @@ export class Orchestrator {
   ): void {
     if (task.status === to && !blockedBy) return;
     if (!canTransition(task.status, to) && task.status !== to) throw new Error(`${task.id}: illegal transition ${task.status} → ${to}`);
+    if (['done', 'cancelled', 'failed', 'awaiting_merge'].includes(to)) this.browserLive.stopPreview(task.id);
     this.append({
       type: 'task.status_changed',
       taskId: task.id,
@@ -1511,6 +2286,12 @@ export class Orchestrator {
       ...(options.length && {
         buttons: options.map((label, option) => [{ label, action: { kind: 'answer' as const, questionId, option } }]),
       }),
+    });
+  }
+
+  private async notifyAssumptions(task: TaskView, assumptions: string[]): Promise<void> {
+    await this.notifyTask(task, {
+      text: `📝 ${task.id} planned without asking about these. If one is wrong, /stop ${task.id} and send the task again with the right detail:\n${assumptions.map((a) => `- ${a}`).join('\n')}`,
     });
   }
 
@@ -1555,10 +2336,22 @@ export class Orchestrator {
   private lastModel(task: TaskView): string | undefined {
     for (const id of [...task.runIds].reverse()) {
       const run = this.state.runs.get(id);
-      if (run?.model && run.mode !== 'review' && run.mode !== 'plan') return run.model;
+      if (run?.model && !READ_ONLY_MODES.includes(run.mode)) return run.model;
     }
     return undefined;
   }
+}
+
+export interface TaskSubmission {
+  taskId?: string;
+  status?: TaskStatus;
+  /** The chat reply. */
+  text: string;
+  error?: 'project' | 'agent' | 'duplicate';
+}
+
+function projectKey(s: string): string {
+  return s.toLowerCase().replace(/[\s._-]+/g, '');
 }
 
 function titleFrom(text: string): string {
@@ -1571,7 +2364,7 @@ function summarizeChecks(results: { command: string; ok: boolean }[]): string {
 }
 
 function sourceKind(gateway: string): SourceKind {
-  const known: SourceKind[] = ['telegram', 'slack', 'discord', 'whatsapp', 'web', 'cli', 'api', 'schedule'];
+  const known: SourceKind[] = ['telegram', 'slack', 'discord', 'whatsapp', 'web', 'cli', 'api', 'schedule', 'hyde-ai'];
   return (known as string[]).includes(gateway) ? (gateway as SourceKind) : 'api';
 }
 

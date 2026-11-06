@@ -5,8 +5,18 @@ import { CommandAdapter } from '@hyde/adapter-command';
 import { containerWrapper, type LaunchWrapper } from '@hyde/adapter-common';
 import { OpenCodeAdapter } from '@hyde/adapter-opencode';
 import {
+  ADAPTER_MAX_EFFORT,
+  BUILTIN_TIERS,
+  effortShift,
+  isFreeModel,
+  jobLevel,
   Registry,
+  shiftEffort,
+  tierFor,
   type AgentAdapter,
+  type Complexity,
+  type Effort,
+  type TierTable,
   type AgentProfile,
   type DetectResult,
   type HarnessState,
@@ -130,11 +140,24 @@ export interface RouteInput {
   now: number;
   /** For review runs: the author's agent, whose vendor the reviewer must differ from. */
   author?: string;
+  /** Agents to skip (e.g. the planner that just failed). */
+  exclude?: string[];
 }
 
-export type RouteResult = { agent: string } | { wait: string } | { none: string };
+export interface RoutedRun {
+  agent: string;
+  /** The tier entry used (may be stronger than asked when the agent has no entry for the level). */
+  tier: Complexity;
+  model?: string;
+  effort?: Effort;
+  free: boolean;
+  /** Human-readable reason, stored on run.dispatched. */
+  why: string;
+}
 
-const MODE_ROLE: Partial<Record<RunMode, string>> = { plan: 'plan', review: 'review' };
+export type RouteResult = RoutedRun | { wait: string } | { none: string };
+
+const MODE_ROLE: Partial<Record<RunMode, string>> = { plan: 'plan', review: 'review', classify: 'triage' };
 
 /** Running runs per agent and per account, from the state. */
 export function load(state: HarnessState): { byAgent: Map<string, number>; byAccount: Map<string, number>; total: number } {
@@ -151,17 +174,22 @@ export function load(state: HarnessState): { byAgent: Map<string, number>; byAcc
 }
 
 /** Highest utilization across an account's windows, and whether a window is exhausted. */
-export function accountQuota(state: HarnessState, account: string, now: number): { max: number; blocked?: string } {
+export function accountQuota(state: HarnessState, account: string, now: number): { max: number; blocked?: string; blockedUntil?: number } {
   let max = 0;
   let blocked: string | undefined;
+  let blockedUntil: number | undefined;
   for (const q of state.quotas.values()) {
     if (q.account !== account) continue;
     if (q.resetsAt && q.resetsAt * 1000 < now) continue; // window already reset
     const u = q.utilization ?? 0;
-    if (q.status === 'rejected') blocked = `${q.window} limit reached`;
+    if (q.status === 'rejected') {
+      blocked = `${q.window} limit reached`;
+      // The account is free again when its last exhausted window resets.
+      if (q.resetsAt) blockedUntil = Math.max(blockedUntil ?? 0, q.resetsAt * 1000);
+    }
     max = Math.max(max, u);
   }
-  return { max, ...(blocked && { blocked }) };
+  return { max, ...(blocked && { blocked }), ...(blockedUntil && { blockedUntil }) };
 }
 
 function recentFailureRate(state: HarnessState, agent: string): number {
@@ -170,30 +198,89 @@ function recentFailureRate(state: HarnessState, agent: string): number {
   return runs.filter((r) => r.failure && r.failure.reason !== 'cancelled').length / runs.length;
 }
 
+/** A profile's tier table: its own `tiers`, the adapter's built-in table, or its one model for every level. */
+export function tierTable(profile: Pick<AgentProfile, 'adapter' | 'model' | 'effort' | 'tiers'>): TierTable {
+  if (profile.tiers && Object.keys(profile.tiers).length) return profile.tiers;
+  const builtin = BUILTIN_TIERS[profile.adapter];
+  if (builtin) return builtin;
+  const one = { ...(profile.model && { model: profile.model }), ...(profile.effort && { effort: profile.effort }) };
+  return { trivial: one, low: one, medium: one, high: one };
+}
+
+/** What a run of `mode` needs: the job kind and its complexity level. */
+export function jobFor(task: TaskView, mode: RunMode): { job: 'code' | 'plan' | 'review' | 'classify'; level: Complexity } {
+  const job = mode === 'plan' ? 'plan' : mode === 'review' ? 'review' : mode === 'classify' ? 'classify' : 'code';
+  // A task the rules couldn't place is planned on the strong tier; coding waits for a real level.
+  const complexity = task.complexity?.confident === false && job === 'plan' ? 'high' : task.complexity?.level;
+  return { job, level: jobLevel(job, complexity) };
+}
+
+/** Free models only classify and do trivial or low coding. */
+function freeAllowed(job: string, level: Complexity): boolean {
+  return job === 'classify' || (job === 'code' && (level === 'trivial' || level === 'low'));
+}
+
+/** The tier an agent would use for a job, or why it can't take it. */
+export function placeOn(
+  profile: HubConfig['agents'][number],
+  vendor: Vendor,
+  job: 'code' | 'plan' | 'review' | 'classify',
+  level: Complexity,
+  routing: HubConfig['routing'],
+): { tier: Complexity; model?: string; effort?: Effort; free: boolean } | { no: string } {
+  const placed = tierFor(tierTable(profile), level);
+  if (!placed) return { no: `${profile.name} has no ${level} tier or stronger` };
+  const model = placed.spec.model ?? profile.model;
+  const free = isFreeModel(profile.adapter, model, placed.spec.free);
+  if (free && !freeAllowed(job, level)) return { no: `${profile.name} runs a free model, which may not ${job === 'code' ? `code ${level} work` : job}` };
+  const claudeOnly = routing.mode === 'claude-only' || (routing.mode === 'free-first' && !freeAllowed(job, level));
+  if (claudeOnly && vendor !== 'anthropic' && job !== 'classify') return { no: `${profile.name} is not Claude (mode ${routing.mode})` };
+  const effort = placed.spec.effort ?? profile.effort;
+  return { tier: placed.level, ...(model && { model }), ...(effort && { effort }), free };
+}
+
 /**
- * Scores each candidate agent: role fit, plus quota headroom, minus recent failure rate.
- * A reviewer must come from a different vendor than the author.
+ * Picks an agent and tier for a run. Candidates must serve the job's tier (or a stronger one):
+ * when they are all busy or out of quota the task waits instead of dropping to a weaker model.
+ * Plan, review and classify runs need an agent with that role. A reviewer must come from a
+ * different vendor than the author, except in claude-only mode.
  */
 export function route(input: RouteInput): RouteResult {
   const { task, mode, project, state, pool, config, now } = input;
-  const role = MODE_ROLE[mode] ?? task.role ?? 'implement';
+  const routing = config.routing;
+  const { job, level } = jobFor(task, mode);
+  const strictRole = MODE_ROLE[mode];
+  const role = strictRole ?? task.role ?? 'implement';
   const loads = load(state);
   let candidates = pool.profiles().filter((p) => pool.usable(p.name));
   if (project.agents) candidates = candidates.filter((p) => project.agents!.includes(p.name));
-  if (task.pinnedAgent && mode !== 'review') candidates = candidates.filter((p) => p.name === task.pinnedAgent);
+  if (task.pinnedAgent && mode !== 'review' && mode !== 'classify') candidates = candidates.filter((p) => p.name === task.pinnedAgent);
+  // A task taken away from an agent (stopped without finishing, out of quota) doesn't go back to it.
+  if (job === 'code' && !task.pinnedAgent && task.leftAgents?.length) candidates = candidates.filter((p) => !task.leftAgents.includes(p.name));
+  if (input.exclude?.length) candidates = candidates.filter((p) => !input.exclude!.includes(p.name));
   if (mode === 'review') {
-    candidates = candidates.filter((p) => p.name !== input.author);
-    if (config.review.crossVendor && input.author) {
+    const sameVendorOk = routing.mode === 'claude-only';
+    if (!sameVendorOk) candidates = candidates.filter((p) => p.name !== input.author);
+    if (config.review.crossVendor && input.author && !sameVendorOk) {
       const authorVendor = pool.vendor(input.author);
       candidates = candidates.filter((p) => pool.vendor(p.name) !== authorVendor);
     }
     if (!candidates.length) return { none: 'no agent from a different vendor is enabled' };
   }
+  if (strictRole && strictRole !== 'triage') {
+    candidates = candidates.filter((p) => p.roles.includes(strictRole));
+    if (!candidates.length) return { none: `no usable agent has the ${strictRole} role` };
+  }
   if (!candidates.length) return { none: task.pinnedAgent ? `agent ${task.pinnedAgent} is not available` : 'no usable agent is enabled' };
 
+  const placements = candidates.map((p) => ({ p, place: placeOn(p, pool.vendor(p.name), job, level, routing) }));
+  const able = placements.filter((x) => !('no' in x.place));
+  if (!able.length) return { none: `no agent can take ${job === 'code' ? `${level} coding` : `the ${job} step`}: ${placements.map((x) => ('no' in x.place ? x.place.no : '')).join('; ')}` };
+
   let waitReason = '';
-  const scored: { name: string; score: number; running: number; order: number }[] = [];
-  candidates.forEach((p, order) => {
+  const scored: { run: RoutedRun; score: number; running: number; order: number }[] = [];
+  able.forEach(({ p, place }, order) => {
+    if ('no' in place) return;
     const quota = accountQuota(state, p.account, now);
     if (quota.blocked) return void (waitReason = `${p.name}: ${quota.blocked}`);
     if (quota.max >= config.quotaSoftCeiling) {
@@ -204,11 +291,28 @@ export function route(input: RouteInput): RouteResult {
     if (agentRunning >= p.maxConcurrent || accountRunning >= p.maxConcurrent) {
       return void (waitReason = `${p.name} is busy`);
     }
-    const fit = p.roles.includes(role) ? 3 : p.roles.includes('implement') && role !== 'plan' && role !== 'review' ? 1 : 0;
-    const score = fit + 2 * (1 - quota.max) - 3 * recentFailureRate(state, p.name);
-    scored.push({ name: p.name, score, running: agentRunning, order });
+    const fit = p.roles.includes(role) ? 3 : p.roles.includes('implement') && job === 'code' ? 1 : 0;
+    // Cheap work prefers free models (balanced: trivial only; free-first: trivial and low; classify: always).
+    const wantsFree =
+      job === 'classify' || (job === 'code' && (level === 'trivial' || (level === 'low' && routing.mode === 'free-first')));
+    const costFit = wantsFree ? (place.free ? 2 : 0) : 0;
+    // A stronger tier than needed is allowed but costs more; prefer exact matches.
+    const exact = place.tier === level ? 0.5 : 0;
+    const score = fit + costFit + exact + 2 * (1 - quota.max) - 3 * recentFailureRate(state, p.name);
+    const shift = effortShift(routing.effort, quota.max);
+    const effort = shiftEffort(place.effort, shift, ADAPTER_MAX_EFFORT[p.adapter] ?? 'high');
+    const why = [
+      `${job === 'code' ? `${level} coding` : `${job} (${level} tier)`}`,
+      place.tier !== level ? `upgraded to ${p.name}'s ${place.tier} tier (no ${level} entry)` : '',
+      shift && place.effort ? `effort ${place.effort} → ${effort} (hyde effort ${routing.effort}${routing.effort === 'auto' ? `, quota ${Math.round(quota.max * 100)}%` : ''})` : '',
+      `mode ${routing.mode}`,
+    ]
+      .filter(Boolean)
+      .join('; ');
+    const run: RoutedRun = { agent: p.name, tier: place.tier, free: place.free, why, ...(place.model && { model: place.model }), ...(effort && { effort }) };
+    scored.push({ run, score, running: agentRunning, order });
   });
   if (!scored.length) return { wait: waitReason || 'all agents are busy' };
   scored.sort((a, b) => b.score - a.score || a.running - b.running || a.order - b.order);
-  return { agent: scored[0]!.name };
+  return scored[0]!.run;
 }

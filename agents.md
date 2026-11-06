@@ -22,8 +22,16 @@
 
 | Agent name | Model | Type | Role | Status | Branch | Last seen |
 |---|---|---|---|---|---|---|
-| main | Claude Opus 5.5 (claude-opus-5-5) | main | main agent | online | feature/phase0-core | 2026-10-27 |
+| main | Claude Opus 5.5 (claude-opus-5-5) | main | main agent | online | feature/hyde-ai | 2026-11-05 |
+| agent-hydeai-api | Claude Opus 5.5 (claude-opus-5-5) | child | hub client API for Hyde AI | offline | agent-hydeai-api/feature/hyde-ai-api | 2026-10-30 |
+| agent-hyde-autonomy | Claude Opus 5.5 (claude-opus-5-5) | child | autonomy and routing engineer | offline | agent-hyde-autonomy/feature/smart-routing | 2026-11-06 |
 
 ## Log
 <!-- - YYYY-MM-DD HH:MM: <agent>: <message> (e.g. "online", "took T-003", "offline") -->
 - 2026-10-27 01:10: main: online, set up workspace, building Phase 0 on feature/phase0-core
+- 2026-10-30 00:05: agent-hydeai-api: online, building the Hyde AI client API (owner chose P0-P2) on agent-hydeai-api/feature/hyde-ai-api
+- 2026-10-30 00:40: agent-hydeai-api: offline, work committed on its branch (not pushed), waiting for the owner's review
+- 2026-11-05: main: created agent-hyde-autonomy (Claude only), worktree /mnt/NewVolume/D/PROJECTS/HYDE AUTONOMY, tasks T-001..T-006
+- 2026-11-05: agent-hyde-autonomy: online (Claude Opus 5.5, child), took T-001..T-006
+- 2026-11-06: agent-hyde-autonomy: T-001..T-007 done (T-007 without git-URL import); stopped before T-008 (Claude 5-hour window at 68%); offline
+- 2026-11-06 02:40: agent-hyde-autonomy: applied the owner's answers (Codex tiers); 5-hour window at 94%, so T-008 not started; offline

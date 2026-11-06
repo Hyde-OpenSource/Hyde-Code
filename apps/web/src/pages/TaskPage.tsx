@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { sourceLabel } from '@hyde/core/office';
 import { ago, api } from '../api.ts';
 import { CommandButton, Status, type PageProps } from '../ui.tsx';
+import { LiveBrowser } from './LiveBrowser.tsx';
 
 type EventRow = Awaited<ReturnType<typeof api.taskEvents>>[number];
 
@@ -21,7 +23,19 @@ function describe(e: EventRow): string {
     case 'task.status_changed':
       return `→ ${p.to}${p.reason ? `: ${p.reason}` : ''}`;
     case 'run.dispatched':
-      return `${p.runId} dispatched to ${p.agent} (${p.mode})`;
+      return `${p.runId} dispatched to ${p.agent} (${p.mode}${p.tier ? `, ${p.tier} tier` : ''}${p.model ? `, ${p.model}` : ''}${p.effort ? `, effort ${p.effort}` : ''})${p.why ? `: ${p.why}` : ''}`;
+    case 'task.classified':
+      return `complexity ${p.level} (${p.by}${p.confident === false ? ', a guess' : ''}): ${p.reason}`;
+    case 'task.waiting':
+      return `waiting: ${p.reason}`;
+    case 'task.todos_updated':
+      return `checklist (${p.by}): ${(p.todos ?? []).filter((t: { done: boolean }) => t.done).length}/${(p.todos ?? []).length} done`;
+    case 'task.plan_gate_set':
+      return `plan then build ${p.on ? 'on' : 'off'} (${p.by})`;
+    case 'browser.action':
+      return `browser step ${p.step}: ${p.label}${p.text ? ` "${p.text}"` : ''}${p.ok ? '' : ` (failed: ${p.error ?? ''})`}`;
+    case 'question.matched':
+      return `${p.by} asked again (${p.status === 'answered' ? 'answered from memory' : 'linked'}) as ${p.questionId}: ${p.text}`;
     case 'question.asked':
       return `${p.questionId} asked: ${p.text}`;
     case 'question.answered':
@@ -43,15 +57,186 @@ function describe(e: EventRow): string {
   }
 }
 
-function Diff({ text }: { text: string }) {
+const LEVELS = ['trivial', 'low', 'medium', 'high'] as const;
+const BY: Record<string, string> = { rules: 'the hub rules', model: 'a cheap model', planner: 'the planner', client: 'the client', owner: 'you', harness: 'the hub' };
+
+/** The task's complexity level, who set it, and buttons to change it. */
+function Complexity({ task, refresh, notify }: { task: PageProps['state']['tasks'][number] } & Pick<PageProps, 'refresh' | 'notify'>) {
+  const c = task.complexity;
+  const open = !['done', 'cancelled', 'failed'].includes(task.status);
   return (
-    <pre className="diff">
-      {text.split('\n').map((line, i) => (
-        <div key={i} className={line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : line.startsWith('@@') ? 'hunk' : ''}>
-          {line || ' '}
+    <div className="card stack complexity">
+      <div className="spread">
+        <strong>Complexity</strong>
+        {c && <span className={`badge level-${c.level}`}>{c.level}</span>}
+      </div>
+      {c ? (
+        <div className="meta">
+          Set by {BY[c.by] ?? c.by}
+          {c.confident ? '' : ' (a guess, being checked)'}: {c.reason}
         </div>
-      ))}
-    </pre>
+      ) : (
+        <div className="meta">Not rated yet.</div>
+      )}
+      {task.waiting && <div className="meta">⏳ Waiting: {task.waiting}</div>}
+      {open && (
+        <div className="row wrap" role="group" aria-label="Change complexity">
+          {LEVELS.filter((l) => l !== c?.level).map((l) => (
+            <CommandButton key={l} command={{ kind: 'level', taskId: task.id, level: l }} label={l} refresh={refresh} notify={notify} />
+          ))}
+        </div>
+      )}
+      {task.assumptions.length > 0 && (
+        <div>
+          <strong>Planner assumptions</strong>
+          {task.assumptions.map((a) => (
+            <div key={a} className="meta">
+              · {a}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The live checklist and the files the task has changed so far. */
+function Work({ task, lastSeq, refresh, notify }: { task: PageProps['state']['tasks'][number]; lastSeq: number } & Pick<PageProps, 'refresh' | 'notify'>) {
+  const [files, setFiles] = useState<{ path: string; added: number; removed: number }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    if (task.worktree) api.files(task.id).then((r) => alive && setFiles(r.files), () => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [task.id, task.worktree, lastSeq]);
+  const done = task.todos.filter((t) => t.done).length;
+  const gate = task.planGate ?? task.complexity?.level === 'high';
+  if (!task.todos.length && !files.length) return null;
+  return (
+    <div className="grid work">
+      <div className="card stack">
+        <div className="spread">
+          <strong>Checklist {task.todos.length ? `(${done}/${task.todos.length})` : ''}</strong>
+          <CommandButton command={{ kind: 'plan', taskId: task.id, on: !gate }} label={gate ? 'Plan then build: on' : 'Plan then build: off'} refresh={refresh} notify={notify} />
+        </div>
+        {task.todos.length ? (
+          <ul className="todos">
+            {task.todos.map((t, i) => (
+              <li key={i} className={t.done ? 'done' : ''}>
+                <span aria-hidden="true">{t.done ? '☑' : '☐'}</span> {t.text}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="meta">No checklist yet.</div>
+        )}
+      </div>
+      <div className="card stack">
+        <strong>Files touched ({files.length})</strong>
+        {files.length ? (
+          <table className="files">
+            <tbody>
+              {files.map((f) => (
+                <tr key={f.path}>
+                  <td className="mono">{f.path}</td>
+                  <td className="add">+{f.added}</td>
+                  <td className="del">−{f.removed}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="meta">Nothing changed yet.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Each diff line with the file and new-side line number it belongs to, for inline comments. */
+function diffRows(text: string): { line: string; file?: string; num?: number }[] {
+  let file: string | undefined;
+  let num = 0;
+  return text.split('\n').map((line) => {
+    if (line.startsWith('+++ ')) file = line.slice(4).replace(/^b\//, '');
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
+    if (hunk) {
+      num = Number(hunk[1]) - 1;
+      return { line };
+    }
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ')) return { line };
+    if (line.startsWith('-')) return { line, ...(file && { file }) };
+    num += 1;
+    return { line, ...(file && { file, num }) };
+  });
+}
+
+/** The diff with "comment" on every line; comments go to the agent with "Send to agent". */
+function Diff({ text, task, notify, refresh }: { text: string; task: PageProps['state']['tasks'][number] } & Pick<PageProps, 'notify' | 'refresh'>) {
+  const [at, setAt] = useState<{ file: string; num?: number } | null>(null);
+  const [draft, setDraft] = useState('');
+  const rows = diffRows(text);
+  const open = task.comments.filter((c) => c.sentSeq === undefined);
+  const save = async () => {
+    if (!at || !draft.trim()) return;
+    try {
+      await api.comment(task.id, { file: at.file, ...(at.num && { line: at.num }), text: draft.trim() });
+      setDraft('');
+      setAt(null);
+      refresh();
+    } catch (err) {
+      notify(`Failed: ${(err as Error).message}`);
+    }
+  };
+  return (
+    <>
+      {task.comments.length > 0 && (
+        <div className="card stack comments">
+          <div className="spread">
+            <strong>Your comments ({open.length} not sent)</strong>
+            <button type="button" className="btn primary" disabled={!open.length} onClick={() => api.sendComments(task.id).then((r) => (notify(r.text), refresh()), (e: Error) => notify(e.message))}>
+              Send to agent
+            </button>
+          </div>
+          {task.comments.map((c) => (
+            <div key={c.id} className="meta">
+              {c.sentSeq ? '✓ ' : ''}
+              <span className="mono">
+                {c.file}
+                {c.line ? `:${c.line}` : ''}
+              </span>{' '}
+              {c.text}
+            </div>
+          ))}
+        </div>
+      )}
+      <pre className="diff">
+        {rows.map((r, i) => (
+          <div key={i} className={`${r.line.startsWith('+') && !r.line.startsWith('+++') ? 'add' : r.line.startsWith('-') && !r.line.startsWith('---') ? 'del' : r.line.startsWith('@@') ? 'hunk' : ''} diff-row`}>
+            {r.file && (
+              <button type="button" className="diff-comment" aria-label={`Comment on ${r.file}${r.num ? ` line ${r.num}` : ''}`} onClick={() => setAt({ file: r.file!, ...(r.num && { num: r.num }) })}>
+                +
+              </button>
+            )}
+            {r.line || ' '}
+            {at && at.file === r.file && at.num === r.num && (
+              <div className="diff-form" onClick={(e) => e.stopPropagation()}>
+                <textarea aria-label="Comment" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="What should the agent change here?" rows={2} />
+                <div className="row">
+                  <button type="button" className="btn primary" onClick={() => void save()}>
+                    Add comment
+                  </button>
+                  <button type="button" className="btn" onClick={() => setAt(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </pre>
+    </>
   );
 }
 
@@ -86,6 +271,7 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
             <Status status={task.status} />
             {task.blockedBy && <span className="badge warn">waiting on {task.blockedBy.id}</span>}
             <span>#{task.projectId}</span>
+            <span>· from {sourceLabel(task.source.kind)}</span>
             {task.agent && <span>· {task.agent}</span>}
             {task.branch && <span className="mono">· {task.branch}</span>}
             {task.parentId && (
@@ -106,8 +292,24 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
           )}
           {(task.status === 'failed' || task.blockedBy?.kind === 'incident') && <CommandButton command={{ kind: 'retry', taskId: task.id }} label="Retry" refresh={refresh} notify={notify} />}
           {open && task.status !== 'awaiting_merge' && <CommandButton command={{ kind: 'stop', target: task.id }} label="Stop" kind="danger" refresh={refresh} notify={notify} />}
+          {task.checkpoints.length > 0 && !task.prUrl && !runs.some((r) => r.state === 'running') && open && <CommandButton command={{ kind: 'undo', taskId: task.id }} label="Undo last turn" refresh={refresh} notify={notify} />}
+          <a className="btn" href={`/api/tasks/${task.id}/export?format=md`}>
+            Export
+          </a>
         </div>
       </div>
+
+      <Complexity task={task} refresh={refresh} notify={notify} />
+
+      <Work task={task} lastSeq={state.lastSeq} refresh={refresh} notify={notify} />
+
+      <LiveBrowser
+        taskId={task.id}
+        steps={events.filter((e) => e.type === 'browser.action').map((e) => e.payload)}
+        running={runs.some((r) => r.state === 'running')}
+        refresh={refresh}
+        notify={notify}
+      />
 
       <div className="grid">
         <div className="card stack">
@@ -217,6 +419,7 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
                 <th>Run</th>
                 <th>Agent</th>
                 <th>Mode</th>
+                <th>Tier</th>
                 <th>State</th>
                 <th>Tokens</th>
                 <th>Started</th>
@@ -231,9 +434,14 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
                     <div className="meta">{r.model}</div>
                   </td>
                   <td>{r.mode}</td>
+                  <td>
+                    {r.tier ?? '–'}
+                    {r.effort && <div className="meta">effort {r.effort}</div>}
+                  </td>
                   <td>{r.state === 'running' ? <span className="badge accent">running</span> : r.failure ? <span className="badge bad">{r.failure.reason}</span> : <span className="badge ok">done</span>}</td>
                   <td className="meta">
                     {r.inputTokens.toLocaleString()} / {r.outputTokens.toLocaleString()}
+                    {r.costUsd > 0 && <div>${r.costUsd.toFixed(3)}</div>}
                   </td>
                   <td className="meta">{ago(r.startedTs)}</td>
                 </tr>
@@ -260,7 +468,7 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
           </button>
         )}
       </h2>
-      {diff !== null && (diff ? <Diff text={diff} /> : <div className="empty">No changes against {task.baseBranch}.</div>)}
+      {diff !== null && (diff ? <Diff text={diff} task={task} notify={notify} refresh={refresh} /> : <div className="empty">No changes against {task.baseBranch}.</div>)}
     </>
   );
 }

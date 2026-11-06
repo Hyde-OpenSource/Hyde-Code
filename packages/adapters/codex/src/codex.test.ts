@@ -92,4 +92,22 @@ describe('quotaFromRateLimits (recorded account/rateLimits/read)', () => {
     ]);
     expect(quotaFromRateLimits(null)).toEqual([]);
   });
+
+  it('rejects only the full window when a limit is reached (seven_day was flagged at 58%)', () => {
+    const limits = (five: number, week: number) => ({
+      rateLimits: { primary: { usedPercent: five, windowDurationMins: 300, resetsAt: 1 }, secondary: { usedPercent: week, windowDurationMins: 10080, resetsAt: 2 }, rateLimitReachedType: 'rate_limit_reached' },
+    });
+    expect(quotaFromRateLimits(limits(100, 58)).map((q) => q.status)).toEqual(['rejected', 'allowed']);
+    expect(quotaFromRateLimits(limits(40, 100)).map((q) => q.status)).toEqual(['allowed', 'rejected']);
+    // Reached but neither window shows 100%: the fullest one is the limit.
+    expect(quotaFromRateLimits(limits(97, 58)).map((q) => q.status)).toEqual(['rejected', 'allowed']);
+  });
+});
+
+describe('tier model and effort flags', () => {
+  it('passes -m and model_reasoning_effort, including xhigh and max', () => {
+    const args = buildArgs({ cwd: '/w', runDir: '/r', prompt: 'p', model: 'gpt-6-luna', effort: 'xhigh' });
+    expect(args).toEqual(expect.arrayContaining(['-m', 'gpt-6-luna', '-c', 'model_reasoning_effort="xhigh"']));
+    expect(buildArgs({ cwd: '/w', runDir: '/r', prompt: 'p' }).join(' ')).not.toContain('model_reasoning_effort');
+  });
 });

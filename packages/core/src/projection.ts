@@ -1,4 +1,5 @@
 import type { ApprovalKind, HarnessEventRecord, ReviewFinding, RunMode, SourceKind, TaskStatus } from './events.ts';
+import type { Classifier, Complexity, Effort } from './routing.ts';
 
 // Current state, derived only from the event log. `apply` is pure: replaying the same
 // events always yields the same state.
@@ -25,8 +26,35 @@ export interface TaskView {
   size?: 'S' | 'M' | 'L';
   /** Agent profile pinned at creation (optional). */
   pinnedAgent?: string;
+  /** Complexity level and who decided it (latest wins; history keeps the trail). */
+  complexity?: { level: Complexity; by: Classifier; reason: string; confident: boolean; seq: number };
+  complexityHistory: { level: Complexity; by: Classifier; reason: string; seq: number }[];
+  /** A client's suggested level (Hyde AI); advisory only. */
+  complexityHint?: Complexity;
+  /** Why the router is holding the task back (cleared when a run starts). */
+  waiting?: string;
+  /** Planner assumptions the owner can see and change. */
+  assumptions: string[];
+  /** Skills chosen for this task; undefined means every enabled skill. */
+  skills?: string[];
+  /** Steps taken in the live browser. */
+  browserSteps: number;
+  /** The owner's diff comments; `sentSeq` once they went to the agent. */
+  comments: { id: string; file: string; line?: number; text: string; by: string; sentSeq?: number }[];
+  /** Worktree checkpoints before each agent turn. */
+  checkpoints: { runId: string; head: string; stash?: string; seq: number }[];
+  /** The latest undo, if any. */
+  undone?: { runId: string; head: string; seq: number };
+  /** The checklist the owner sees live. */
+  todos: { text: string; done: boolean }[];
+  /** Plan-then-build override; undefined means the default (on for high complexity). */
+  planGate?: boolean;
   /** Agent profile that owns the worktree. */
   agent?: string;
+  /** Seq of the latest workspace assignment (runs after it belong to the current agent). */
+  agentSeq?: number;
+  /** Agents the task was taken away from; the router doesn't give it back to them. */
+  leftAgents: string[];
   node?: string;
   branch?: string;
   worktree?: string;
@@ -54,6 +82,11 @@ export interface RunView {
   agent: string;
   node: string;
   mode: RunMode;
+  /** Tier, model and effort the hub asked for (model is replaced by the CLI's own report on start). */
+  tier?: Complexity;
+  requestedModel?: string;
+  effort?: Effort;
+  why?: string;
   dispatchedSeq: number;
   startedTs: string;
   state: 'running' | 'exited';
@@ -87,6 +120,8 @@ export interface QuestionView {
   answer?: string;
   answeredSeq?: number;
   answeredBy?: string;
+  /** Later asks (any agent, any task) that matched this question instead of creating a new one. */
+  matches: { taskId: string; runId: string; text: string; by: string; ts: string; blocking: boolean }[];
 }
 
 export interface ApprovalView {
@@ -137,6 +172,17 @@ export interface LessonView {
   writtenIn?: string;
 }
 
+export interface SkillProposalView {
+  id: string;
+  taskId?: string;
+  name: string;
+  description: string;
+  body: string;
+  by: string;
+  status: 'proposed' | 'approved' | 'rejected';
+  path?: string;
+}
+
 export interface NodeView {
   id: string;
   owner: string;
@@ -157,6 +203,7 @@ export interface HarnessState {
   quotas: Map<string, QuotaView>;
   artifacts: Map<string, ArtifactView>;
   lessons: Map<string, LessonView>;
+  skillProposals: Map<string, SkillProposalView>;
   nodes: Map<string, NodeView>;
   policy: { allow: number; deny: number; approval: number };
 }
@@ -172,6 +219,7 @@ export function emptyState(): HarnessState {
     quotas: new Map(),
     artifacts: new Map(),
     lessons: new Map(),
+    skillProposals: new Map(),
     nodes: new Map(),
     policy: { allow: 0, deny: 0, approval: 0 },
   };
@@ -204,6 +252,13 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         dependsOn: p.dependsOn,
         runIds: [],
         attempts: 0,
+        complexityHistory: [],
+        assumptions: [],
+        leftAgents: [],
+        browserSteps: 0,
+        todos: [],
+        comments: [],
+        checkpoints: [],
         reviews: [],
         artifactIds: [],
         statusHistory: [],
@@ -212,7 +267,13 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         ...(p.role && { role: p.role }),
         ...(p.size && { size: p.size }),
         ...(p.agent && { pinnedAgent: p.agent }),
+        ...(p.complexityHint && { complexityHint: p.complexityHint }),
       });
+      if (p.complexity) {
+        const t = state.tasks.get(p.taskId)!;
+        t.complexity = { level: p.complexity, by: 'planner', reason: 'set by the plan', confident: true, seq: record.seq };
+        t.complexityHistory.push({ level: p.complexity, by: 'planner', reason: 'set by the plan', seq: record.seq });
+      }
       if (p.parentId) state.tasks.get(p.parentId)?.children.push(p.taskId);
       break;
     }
@@ -235,13 +296,92 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
       if (p.writeScope.length) task.writeScope = p.writeScope;
       if (p.role) task.role = p.role;
       if (p.size) task.size = p.size;
+      if (p.assumptions.length) task.assumptions = p.assumptions;
+      break;
+    }
+    case 'task.classified': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (!task) break;
+      const { level, by, reason, confident } = record.payload;
+      task.complexity = { level, by, reason, confident, seq: record.seq };
+      task.complexityHistory.push({ level, by, reason, seq: record.seq });
+      break;
+    }
+    case 'task.comment_added': {
+      const task = state.tasks.get(record.payload.taskId);
+      const p = record.payload;
+      if (task) task.comments.push({ id: p.commentId, file: p.file, text: p.text, by: p.by, ...(p.line !== undefined && { line: p.line }) });
+      break;
+    }
+    case 'task.comments_sent': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) for (const c of task.comments) if (record.payload.commentIds.includes(c.id)) c.sentSeq = record.seq;
+      break;
+    }
+    case 'task.checkpoint': {
+      const task = state.tasks.get(record.payload.taskId);
+      const p = record.payload;
+      if (task) task.checkpoints.push({ runId: p.runId, head: p.head, seq: record.seq, ...(p.stash && { stash: p.stash }) });
+      break;
+    }
+    case 'task.undone': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.undone = { runId: record.payload.runId, head: record.payload.head, seq: record.seq };
+      break;
+    }
+    case 'task.todos_updated': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.todos = record.payload.todos;
+      break;
+    }
+    case 'task.plan_gate_set': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.planGate = record.payload.on;
+      break;
+    }
+    case 'browser.action': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.browserSteps = Math.max(task.browserSteps, record.payload.step);
+      break;
+    }
+    case 'task.skills_set': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.skills = record.payload.skills;
+      break;
+    }
+    case 'skill.proposed': {
+      const p = record.payload;
+      state.skillProposals.set(p.skillId, { id: p.skillId, name: p.name, description: p.description, body: p.body, by: p.by, status: 'proposed', ...(p.taskId && { taskId: p.taskId }) });
+      break;
+    }
+    case 'skill.decided': {
+      const s = state.skillProposals.get(record.payload.skillId);
+      if (s) s.status = record.payload.approved ? 'approved' : 'rejected';
+      break;
+    }
+    case 'skill.written': {
+      const s = state.skillProposals.get(record.payload.skillId);
+      if (s) s.path = record.payload.path;
+      break;
+    }
+    case 'task.waiting': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.waiting = record.payload.reason;
       break;
     }
     case 'task.workspace_assigned': {
       const task = state.tasks.get(record.payload.taskId);
       if (!task) break;
       const p = record.payload;
-      Object.assign(task, { agent: p.agent, branch: p.branch, worktree: p.worktree, baseBranch: p.baseBranch, node: p.node });
+      Object.assign(task, { agent: p.agent, branch: p.branch, worktree: p.worktree, baseBranch: p.baseBranch, node: p.node, agentSeq: record.seq });
+      break;
+    }
+    case 'task.reassigned': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (!task) break;
+      if (!task.leftAgents.includes(record.payload.from)) task.leftAgents.push(record.payload.from);
+      delete task.agent;
+      delete task.sessionRef;
       break;
     }
     case 'task.agent_completed': {
@@ -296,6 +436,10 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         agent: p.agent,
         node: p.node,
         mode: p.mode,
+        ...(p.tier && { tier: p.tier }),
+        ...(p.model && { requestedModel: p.model, model: p.model }),
+        ...(p.effort && { effort: p.effort }),
+        ...(p.why && { why: p.why }),
         dispatchedSeq: record.seq,
         startedTs: record.ts,
         state: 'running',
@@ -311,6 +455,7 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
       if (task) {
         task.runIds.push(p.runId);
         if (p.mode === 'start') task.attempts += 1;
+        delete task.waiting;
       }
       break;
     }
@@ -325,8 +470,8 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
           run.sessionRef = event.sessionRef;
           run.model = event.model;
           const task = state.tasks.get(run.taskId);
-          // Planner and reviewer sessions are separate from the author's session.
-          if (task && !['plan', 'review'].includes(run.mode)) task.sessionRef = event.sessionRef;
+          // Planner, reviewer and classifier sessions are separate from the author's session.
+          if (task && !['plan', 'review', 'classify'].includes(run.mode)) task.sessionRef = event.sessionRef;
           break;
         }
         case 'text.delta':
@@ -373,7 +518,13 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         options: p.options,
         status: 'open',
         askedTs: record.ts,
+        matches: [],
       });
+      break;
+    }
+    case 'question.matched': {
+      const p = record.payload;
+      state.questions.get(p.questionId)?.matches.push({ taskId: p.taskId, runId: p.runId, text: p.text, by: p.by, ts: record.ts, blocking: p.blocking });
       break;
     }
     case 'question.answered': {
@@ -484,6 +635,7 @@ const ID_MAPS = {
   run: 'runs',
   art: 'artifacts',
   L: 'lessons',
+  S: 'skillProposals',
 } as const;
 
 /** Next human-friendly id with a prefix: T-1, Q-1, A-1, R-1, run-1, art-1, L-1. */
@@ -509,6 +661,7 @@ export function snapshot(state: HarnessState) {
     quotas: [...state.quotas.values()],
     artifacts: [...state.artifacts.values()],
     lessons: [...state.lessons.values()],
+    skillProposals: [...state.skillProposals.values()],
     nodes: [...state.nodes.values()],
     policy: state.policy,
   };

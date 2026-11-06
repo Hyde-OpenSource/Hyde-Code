@@ -38,7 +38,7 @@ export function freePort(): Promise<number> {
   });
 }
 
-async function waitForUrl(url: string, timeoutMs: number, exited: () => boolean): Promise<void> {
+export async function waitForUrl(url: string, timeoutMs: number, exited: () => boolean): Promise<void> {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     if (exited()) throw new Error('the dev server exited before it was ready');

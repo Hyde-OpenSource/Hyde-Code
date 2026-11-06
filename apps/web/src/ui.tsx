@@ -7,6 +7,10 @@ export interface PageProps {
   refresh: () => void;
   notify: (text: string) => void;
   feed: FeedLine[];
+  /** The project picked in the sidebar, or null for all projects. */
+  project: string | null;
+  /** `state` narrowed to that project (equal to state for all projects). */
+  scoped: HubState;
 }
 
 export function Toast({ text, onDone }: { text: string; onDone: () => void }) {

@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="hyde-token" content="__HYDE_TOKEN__">
+  <meta name="color-scheme" content="dark light">
+  <title>Hyde AI</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></symbol>
+    <symbol id="i-tools" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 6.3-6.3a4 4 0 0 0-5-5L10 5l3-2Z"/><path d="m3 21 6-6"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.01"/><circle cx="12" cy="12" r="9"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4.4 3 7.6 7 9 4-1.4 7-4.6 7-9V6Z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5Z"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.6-4.5L4 8M4 4v4h4M4 13a8 8 0 0 0 14.6 4.5L20 16M20 20v-4h-4"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h6.5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16"/></symbol>
+    <symbol id="i-pr" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4M13 3.5 10.5 6 13 8.5"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9Z"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  </svg>
+
+  <div class="shell">
+    <aside class="sidebar" aria-label="Main">
+      <div class="brand">
+        <img src="/icon.svg" alt="" width="28" height="28">
+        <div>
+          <div class="brand-name">Hyde</div>
+          <div class="brand-sub" id="version">Agent</div>
+        </div>
+      </div>
+      <nav class="nav" role="tablist">
+        <button class="nav-item active" data-view="assistant" role="tab" aria-selected="true"><svg><use href="#i-chat"/></svg><span>Assistant</span></button>
+        <button class="nav-item" data-view="code" role="tab" aria-selected="false"><svg><use href="#i-code"/></svg><span>Hyde Code</span><span class="nav-badge" id="code-badge" hidden></span></button>
+        <button class="nav-item" data-view="tools" role="tab" aria-selected="false"><svg><use href="#i-tools"/></svg><span>AI tools</span></button>
+        <button class="nav-item" data-view="apps" role="tab" aria-selected="false"><svg><use href="#i-grid"/></svg><span>Apps</span></button>
+        <button class="nav-item" data-view="engine" role="tab" aria-selected="false"><svg><use href="#i-spark"/></svg><span>AI engine</span></button>
+      </nav>
+      <button class="engine-pill" id="engine-pill" data-view="engine" title="AI engine status">
+        <span class="dot" id="engine-dot"></span>
+        <span class="engine-text"><span id="engine-label">Rules only</span><small id="engine-model">Connect a free AI model</small></span>
+      </button>
+    </aside>
+
+    <main class="main">
+      <!-- Assistant -->
+      <section class="view active" id="view-assistant" aria-label="Assistant">
+        <header class="topbar">
+          <h1>Assistant</h1>
+          <div class="topbar-actions">
+            <span class="hint"><kbd>Ctrl</kbd><kbd>K</kbd> focus · <kbd>↑</kbd> last command</span>
+            <button class="icon-btn" id="clear-history" title="Clear conversation" aria-label="Clear conversation"><svg><use href="#i-trash"/></svg></button>
+          </div>
+        </header>
+        <div class="feed" id="feed" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <img src="/icon.svg" alt="" width="48" height="48">
+            <h2>What should I do?</h2>
+            <p>Ask in plain words. Hyde runs known commands instantly and asks before anything that changes your system.</p>
+            <div class="chips" id="examples"></div>
+          </div>
+        </div>
+        <form class="composer" id="composer" autocomplete="off">
+          <div class="composer-box">
+            <input id="input" type="text" placeholder="Open chrome and vs code, then set volume to 40…" aria-label="Command" maxlength="2000">
+            <button type="button" class="icon-btn mic" id="mic" title="Speak a command" aria-label="Speak a command" hidden><svg><use href="#i-mic"/></svg></button>
+            <button type="submit" class="send" id="send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Hyde Code -->
+      <section class="view" id="view-code" aria-label="Hyde Code">
+        <header class="topbar">
+          <h1>Hyde Code</h1>
+          <div class="topbar-actions">
+            <label class="mini-check" id="notify-wrap" title="Desktop notifications when an agent asks something, needs approval or opens a PR" hidden><input type="checkbox" id="notify-toggle"> Notify me</label>
+            <span class="status" id="hub-status"><span class="dot"></span>Checking…</span>
+            <button class="btn ghost small" id="hub-start" hidden><svg><use href="#i-play"/></svg>Start hub</button>
+            <button class="btn small" id="hub-open"><svg><use href="#i-external"/></svg>Open office</button>
+          </div>
+        </header>
+        <div class="page">
+          <div class="code-layout">
+            <div class="code-main">
+              <form class="card assign" id="assign-form" autocomplete="off">
+                <div class="assign-head">
+                  <h3>Give your coding agents a task</h3>
+                  <p>Hyde Code plans it, runs Claude Code, Codex or OpenCode in a worktree, reviews the diff and opens a PR. You approve the push.</p>
+                </div>
+                <textarea id="assign-text" rows="3" maxlength="4000" placeholder="Add a dark mode toggle to the settings page. Done when it persists across reloads." aria-label="Task"></textarea>
+                <div class="assign-row">
+                  <label class="select-field"><span>Project</span><select id="assign-project" aria-label="Project"></select></label>
+                  <label class="select-field"><span>Agent</span><select id="assign-agent" aria-label="Agent"><option value="">Best available</option></select></label>
+                  <button type="button" class="icon-btn" id="set-default" title="Make this the default project for voice and chat" aria-label="Make default project"><svg><use href="#i-star"/></svg></button>
+                  <button type="submit" class="btn primary" id="assign-send"><svg><use href="#i-send"/></svg>Assign</button>
+                </div>
+                <small class="muted">Tip: in the Assistant just say <b>“hyde code add a footer in &lt;project&gt; using codex”</b>.</small>
+              </form>
+
+              <h2 class="section-title" id="needs-title">Waiting for you</h2>
+              <div class="stack" id="needs"></div>
+
+              <h2 class="section-title">Tasks</h2>
+              <div class="card tasks" id="tasks"></div>
+            </div>
+            <aside class="code-side">
+              <h2 class="section-title first">Agents</h2>
+              <div class="stack" id="agents"></div>
+              <div class="card guide">
+                <h3>How it fits together</h3>
+                <ol>
+                  <li><b>Hyde AI</b> (this app) understands what you say.</li>
+                  <li>Coding requests become <b>Hyde Code</b> tasks.</li>
+                  <li>The hub picks an agent, works in a branch and asks you here or in chat.</li>
+                  <li>You approve the push and merge. Nothing reaches <code>main</code> without you.</li>
+                </ol>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tools -->
+      <section class="view" id="view-tools" aria-label="AI tools">
+        <header class="topbar">
+          <h1>AI tools</h1>
+          <div class="topbar-actions">
+            <button class="btn ghost" id="refresh-tools"><svg><use href="#i-refresh"/></svg>Refresh</button>
+          </div>
+        </header>
+        <div class="page">
+          <p class="lede">One-click installs for free, open-source AI tools. Pair OmniRoute with Hyde to route requests across free model providers.</p>
+          <div class="tool-grid" id="tools"><div class="skeleton"></div><div class="skeleton"></div></div>
+        </div>
+      </section>
+
+      <!-- Apps -->
+      <section class="view" id="view-apps" aria-label="Apps">
+        <header class="topbar">
+          <h1>Apps</h1>
+          <div class="topbar-actions">
+            <button class="btn ghost" id="reload-pack"><svg><use href="#i-refresh"/></svg>Reload commands</button>
+          </div>
+        </header>
+        <div class="page">
+          <p class="lede">Apps Hyde can open and close by name. Add your own in <code id="apps-path">~/.config/hyde-ai/apps.toml</code>, then reload.</p>
+          <div class="app-grid" id="apps"></div>
+        </div>
+      </section>
+
+      <!-- Engine -->
+      <section class="view" id="view-engine" aria-label="AI engine">
+        <header class="topbar"><h1>AI engine</h1></header>
+        <div class="page narrow">
+          <form id="engine-form" autocomplete="off">
+            <div class="card toggle-card">
+              <div>
+                <h3>Use AI for open-ended requests</h3>
+                <p>When the built-in commands don't match, Hyde asks the model to translate your words into a safe command, or to answer directly.</p>
+              </div>
+              <label class="switch"><input type="checkbox" id="ai-enabled"><span></span></label>
+            </div>
+
+            <h2 class="section-title">Provider</h2>
+            <div class="providers" id="providers" role="radiogroup" aria-label="Provider"></div>
+            <p class="provider-note" id="provider-note"></p>
+
+            <div class="card fields">
+              <label class="field">
+                <span>Endpoint</span>
+                <input id="ai-base" type="url" placeholder="https://…/v1" spellcheck="false">
+              </label>
+              <label class="field">
+                <span class="field-row">API key <a id="key-link" target="_blank" rel="noopener noreferrer">Get a free key <svg><use href="#i-external"/></svg></a></span>
+                <div class="input-group">
+                  <input id="ai-key" type="password" placeholder="Paste your key" spellcheck="false" autocomplete="off">
+                  <button type="button" class="icon-btn" id="toggle-key" title="Show key" aria-label="Show key"><svg><use href="#i-eye"/></svg></button>
+                </div>
+                <small class="muted" id="key-hint"></small>
+              </label>
+              <label class="field">
+                <span class="field-row">Model
+                  <label class="mini-check"><input type="checkbox" id="free-only" checked> free only</label>
+                </span>
+                <div class="input-group">
+                  <input id="ai-model" list="model-list" placeholder="Choose or type a model id" spellcheck="false">
+                  <button type="button" class="btn ghost small" id="load-models"><svg><use href="#i-refresh"/></svg>Load models</button>
+                </div>
+                <datalist id="model-list"></datalist>
+                <small class="muted" id="models-status"></small>
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <div class="test-result" id="test-result" role="status"></div>
+              <button type="button" class="btn ghost" id="test-ai">Test connection</button>
+              <button type="submit" class="btn primary" id="save-ai">Save</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>

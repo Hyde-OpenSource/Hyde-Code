@@ -158,6 +158,8 @@ export async function makeHarness(options: {
       },
     ],
     notifications: { digestMinutes: 0, ownerChat: 'telegram:owner' },
+    // Scripted turns are consumed in order; tests of the cheap classifier turn it on themselves.
+    routing: { classifier: false },
     ...options.config,
   };
   const config = parseConfig(raw, join(root, 'hyde.config.json'), {});

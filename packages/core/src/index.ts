@@ -6,3 +6,4 @@ export * from './store.ts';
 export * from './chat.ts';
 export * from './commands.ts';
 export * from './office.ts';
+export * from './routing.ts';

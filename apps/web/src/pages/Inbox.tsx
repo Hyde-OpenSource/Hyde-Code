@@ -91,6 +91,18 @@ export function NeedsYou({ state, refresh, notify }: Pick<PageProps, 'state' | '
             </span>
           </div>
           <div style={{ whiteSpace: 'pre-wrap' }}>{q.text}</div>
+          {q.matches.length > 0 && (
+            <div className="meta">
+              Also asked by{' '}
+              {[...new Map(q.matches.map((m) => [`${m.by}|${m.taskId}`, m])).values()].map((m, i) => (
+                <span key={`${m.by}${m.taskId}`}>
+                  {i ? ', ' : ''}
+                  {m.by} on <a href={`#task/${m.taskId}`}>{m.taskId}</a>
+                </span>
+              ))}
+              . One answer goes to all of them.
+            </div>
+          )}
           <Answer id={q.id} options={q.options} refresh={refresh} notify={notify} />
         </div>
       ))}
@@ -123,7 +135,8 @@ export function NeedsYou({ state, refresh, notify }: Pick<PageProps, 'state' | '
   );
 }
 
-export function Inbox(props: PageProps) {
+export function Inbox(all: PageProps) {
+  const props = { ...all, state: all.scoped };
   const incidents = [...props.state.incidents].reverse().slice(0, 10);
   return (
     <>

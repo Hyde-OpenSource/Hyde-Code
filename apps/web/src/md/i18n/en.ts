@@ -1,0 +1,56 @@
+// English strings used by the ported office scene and components.
+// Adapted from Munder Difflin's en.json (MIT); references to the TV show are rewritten.
+export const EN = {
+  office: {
+    gpuError: 'The office floor lost its GPU context.\n\nReload the page to bring it back.',
+    errand: {
+      water: ['watering the plants', 'giving the plants a drink', 'they grow so fast'],
+      window: ['letting some air in', 'a bit of fresh air', 'nice breeze today'],
+      dispenser: ['getting some water', 'hydration break', 'staying sharp'],
+      fridge: ['anything good in the fridge?', 'who took my yogurt?', 'just looking…'],
+      shelf: ['checking out the shelf', 'anything new in here?', 'so much good stuff'],
+      bin: ['out with the scrap paper', 'desk cleanup day', 'tidying up a little'],
+      smoke: ['the floor runs itself', 'boss break.', 'thinking big thoughts', 'quick breather'],
+    },
+    suckUp: [
+      'already shipped {{done}} tasks, {{godName}}!',
+      '{{done}} tasks done this week, boss!',
+      'great plan as always, {{godName}}!',
+      'I was JUST about to do exactly that!',
+      'on it, {{godName}}!',
+      'working hard, boss!',
+      'tests are green, promise.',
+    ],
+    gossip: [
+      'has the hub ever written a line of code?',
+      "another 'quick plan' that took an hour…",
+      'it split my task into five tasks',
+      'it asked the owner a question. again.',
+      'review said "changes". on a typo.',
+      'who keeps queueing Friday deploys?',
+      'quota at 80%, everyone breathe',
+    ],
+    cheer: ['done! ✔', 'nailed it', "that's a wrap", 'ship it', 'another one done', 'crushed it', 'in the books'],
+    mugs: { empty: 'no clean mugs left…', brewing: 'brewing a fresh one', washing: 'washing the mug' },
+    activity: {
+      waiting: 'waiting',
+      needsYou: 'needs you',
+      compacting: 'compacting context',
+      looping: 'looping — breaker armed',
+      runningFloor: 'running the floor',
+      idle: 'idle',
+    },
+  },
+  badge: {
+    idle: 'idle',
+    thinking: 'planning',
+    working: 'working',
+    waiting: 'waiting',
+    blocked: 'needs you',
+    success: 'done',
+    ghost: 'off',
+    compacting: 'compacting',
+    looping: 'looping',
+    typing: 'your draft',
+  },
+};

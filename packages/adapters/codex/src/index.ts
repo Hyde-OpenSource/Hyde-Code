@@ -185,15 +185,20 @@ export function quotaFromRateLimits(result: unknown): QuotaSnapshot[] {
   const r = (result as { rateLimits?: Record<string, any> } | null)?.rateLimits;
   if (!r) return [];
   const out: QuotaSnapshot[] = [];
-  for (const [key, w] of [['primary', r.primary], ['secondary', r.secondary]] as const) {
-    if (!w) continue;
+  const windows = ([['primary', r.primary], ['secondary', r.secondary]] as const).filter(([, w]) => w);
+  // rateLimitReachedType says the account hit *a* limit. Only the window that is full is
+  // rejected; marking every window rejected sent "seven_day limit reached" at 58% (hub.log, 2026-10-29..11-01).
+  const full = windows.filter(([, w]) => Number(w.usedPercent) >= 100).map(([key]) => key);
+  const fullest = [...windows].sort((a, b) => Number(b[1].usedPercent) - Number(a[1].usedPercent))[0]?.[0];
+  for (const [key, w] of windows) {
     const mins = Number(w.windowDurationMins);
     const window = mins === 300 ? 'five_hour' : mins === 10080 ? 'seven_day' : `${key}_${mins}m`;
     const utilization = Number(w.usedPercent) / 100;
+    const reached = full.includes(key) || (Boolean(r.rateLimitReachedType) && !full.length && key === fullest);
     out.push({
       window,
       utilization,
-      status: r.rateLimitReachedType || utilization >= 1 ? 'rejected' : utilization >= 0.8 ? 'warning' : 'allowed',
+      status: reached ? 'rejected' : utilization >= 0.8 ? 'warning' : 'allowed',
       ...(typeof w.resetsAt === 'number' && { resetsAt: w.resetsAt }),
     });
   }

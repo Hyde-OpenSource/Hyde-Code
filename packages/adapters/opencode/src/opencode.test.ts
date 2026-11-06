@@ -67,3 +67,11 @@ describe('config and args', () => {
     expect(args.at(-1)).toContain('{"type":"object"}');
   });
 });
+
+describe('tier model and effort flags', () => {
+  it('passes the model and clamps the variant to high', () => {
+    expect(buildArgs({ cwd: '/w', runDir: '/r', prompt: 'p', model: 'opencode/big-pickle', effort: 'max' })).toEqual(expect.arrayContaining(['-m', 'opencode/big-pickle', '--variant', 'high']));
+    expect(buildArgs({ cwd: '/w', runDir: '/r', prompt: 'p', effort: 'low' })).toEqual(expect.arrayContaining(['--variant', 'low']));
+    expect(buildArgs({ cwd: '/w', runDir: '/r', prompt: 'p' })).not.toContain('--variant');
+  });
+});

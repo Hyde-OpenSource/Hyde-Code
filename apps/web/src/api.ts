@@ -30,10 +30,18 @@ export interface Metrics {
 
 export type HubState = StateSnapshot & {
   agents: AgentInfo[];
-  projects: { id: string; name: string; baseBranch: string; releaseBranch: string; checks: string[]; preview: boolean }[];
+  projects: { id: string; name: string; path: string; baseBranch: string; releaseBranch: string; checks: string[]; preview: boolean }[];
   metrics: Metrics[];
   stages: { planner: boolean; review: boolean; browser: boolean; policy: boolean };
 };
+
+export interface SkillsInfo {
+  skills: { name: string; description: string; source: string; files: string[]; projects: string[]; enabled: boolean }[];
+  clis: Record<string, string>;
+  proposals: { id: string; taskId?: string; name: string; description: string; body: string; by: string; status: string; path?: string }[];
+  folders: string[];
+  disabled: string[];
+}
 
 export class AuthError extends Error {}
 
@@ -52,12 +60,20 @@ export const api = {
     call<{ text: string }>('/api/commands', { method: 'POST', body: JSON.stringify(typeof command === 'string' ? { text: command } : { command }) }),
   taskEvents: (id: string) => call<(FeedEvent & { payload: any })[]>(`/api/tasks/${id}/events`),
   diff: (id: string) => call<string>(`/api/tasks/${id}/diff`),
+  comment: (id: string, body: { file: string; line?: number; text: string }) => call<{ id: string }>(`/api/tasks/${id}/comments`, { method: 'POST', body: JSON.stringify(body) }),
+  sendComments: (id: string) => call<{ text: string }>(`/api/tasks/${id}/comments/send`, { method: 'POST' }),
+  files: (id: string) => call<{ files: { path: string; added: number; removed: number }[] }>(`/api/tasks/${id}/files`),
   config: () => call<Record<string, any>>('/api/config'),
+  skills: () => call<SkillsInfo>('/api/skills'),
+  skill: (name: string) => call<{ name: string; source: string; dir: string; files: string[]; text: string }>(`/api/skills/${encodeURIComponent(name)}`),
   saveConfig: (raw: unknown) => call<{ ok: boolean }>('/api/config', { method: 'PUT', body: JSON.stringify(raw) }),
   detect: () =>
     call<{ id: string; label: string; kind: string; installed: boolean; signedIn: boolean; version?: string; account?: string; problem?: string; howTo?: string; suggest?: Record<string, any> }[]>('/api/setup/detect'),
   feed: () => call<FeedEvent[]>('/api/feed'),
-  audit: () => call<{ seq: number; ts: string; type: string; actor: { kind: string; id: string }; taskId?: string; runId?: string }[]>('/api/audit'),
+  projectList: () => call<{ projects: { id: string; name: string; path: string }[]; terms: { version: string; url: string } }>('/api/projects'),
+  addProject: (path: string) => call<{ added: boolean; project: { id: string; name: string; path: string } }>('/api/projects', { method: 'POST', body: JSON.stringify({ path, trust: true }) }),
+  removeProject: (id: string) => call<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  audit: () => call<{ seq: number; ts: string; type: string; actor: { kind: string; id: string }; taskId?: string; runId?: string; source?: string }[]>('/api/audit'),
 };
 
 const listeners = new Set<(e: FeedEvent) => void>();
@@ -146,4 +162,21 @@ export function ago(ts: string | undefined): string {
 
 export function navigate(hash: string): void {
   window.location.hash = hash;
+}
+
+/** The hub state narrowed to one project's tasks (agents and quota stay global). */
+export function scopeState(s: HubState, project: string | null): HubState {
+  if (!project) return s;
+  const tasks = s.tasks.filter((t) => t.projectId === project);
+  const ids = new Set(tasks.map((t) => t.id));
+  return {
+    ...s,
+    tasks,
+    runs: s.runs.filter((r) => ids.has(r.taskId)),
+    questions: s.questions.filter((q) => ids.has(q.taskId)),
+    approvals: s.approvals.filter((a) => ids.has(a.taskId)),
+    incidents: s.incidents.filter((i) => !i.taskId || ids.has(i.taskId)),
+    artifacts: s.artifacts.filter((a) => ids.has(a.taskId)),
+    lessons: s.lessons.filter((l) => !l.taskId || ids.has(l.taskId)),
+  };
 }

@@ -15,7 +15,7 @@ describe('harness MCP server', () => {
   it('lists the harness tools', async () => {
     const client = await connect(async () => 'ok');
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['ask_question', 'complete_task', 'propose_lesson', 'report_progress', 'request_approval']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['ask_question', 'complete_task', 'propose_lesson', 'propose_skill', 'report_progress', 'request_approval', 'update_todos']);
   });
 
   it('forwards validated calls to the hub', async () => {

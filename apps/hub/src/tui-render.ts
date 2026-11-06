@@ -33,6 +33,10 @@ export interface TuiView {
   session: FeedEvent[];
   input?: { label: string; text: string };
   flash?: string;
+  /** The project this terminal was opened in (`hyde` in its folder). */
+  project?: string;
+  /** Show every project instead of just `project` (key p). */
+  allProjects?: boolean;
   connected: boolean;
   tick: number;
   color: boolean;
@@ -106,10 +110,19 @@ export function activities(state: TuiState): AgentActivity[] {
   return state.agents.map((a) => agentActivity(state, a));
 }
 
+type Scope = Pick<TuiView, 'project' | 'allProjects'> | undefined;
+
+/** Does this task belong to the projects in view? */
+function inScope(state: TuiState, taskId: string | undefined, scope: Scope): boolean {
+  if (!scope?.project || scope.allProjects || !taskId) return true;
+  return state.tasks.find((t) => t.id === taskId)?.projectId === scope.project;
+}
+
 /** Items on the inbox screen, in the order the cursor walks them. */
-export function inboxEntries(state: TuiState) {
-  const o = openItems(state);
-  const merges = state.tasks.filter((t) => t.status === 'awaiting_merge' && t.prUrl && !t.children.length);
+export function inboxEntries(state: TuiState, scope?: Scope) {
+  const all = openItems(state);
+  const o = { questions: all.questions.filter((q) => inScope(state, q.taskId, scope)), approvals: all.approvals.filter((a) => inScope(state, a.taskId, scope)), lessons: all.lessons };
+  const merges = state.tasks.filter((t) => t.status === 'awaiting_merge' && t.prUrl && !t.children.length && inScope(state, t.id, scope));
   return [
     ...o.approvals.map((a) => ({ kind: 'approval' as const, id: a.id, taskId: a.taskId, title: `${a.kind.replace('-', ' ')}: ${a.summary}`, options: [] as string[] })),
     ...o.questions.map((q) => ({ kind: 'question' as const, id: q.id, taskId: q.taskId, title: q.text, options: q.options })),
@@ -126,9 +139,9 @@ const BOARD: [string, string[]][] = [
   ['DONE', ['done']],
 ];
 
-export function boardTasks(state: TuiState) {
+export function boardTasks(state: TuiState, scope?: Scope) {
   const placed = (t: TuiState['tasks'][number]) => (t.status === 'blocked' || t.status === 'failed' ? (t.statusHistory.at(-1)?.from ?? 'running') : t.status);
-  return BOARD.map(([title, statuses]) => ({ title, tasks: state.tasks.filter((t) => t.status !== 'cancelled' && statuses.includes(placed(t))) }));
+  return BOARD.map(([title, statuses]) => ({ title, tasks: state.tasks.filter((t) => t.status !== 'cancelled' && statuses.includes(placed(t)) && inScope(state, t.id, scope)) }));
 }
 
 function bar(value: number, n: number): Line {
@@ -144,7 +157,8 @@ function header(v: TuiView, count: number): Line {
     const on = v.screen === id || (v.screen === 'task' && id === 'board');
     tabs.push(s(` ${label} `, on ? 'accentBg' : id === 'inbox' && count ? 'warn' : 'dim'), s(' '));
   });
-  return [s(' ▣ HYDE CODE ', 'accentBg'), s('  '), ...tabs];
+  const where = v.project ? (v.allProjects ? ' all projects ' : ` #${v.project} `) : '';
+  return [s(' ▣ HYDE CODE ', 'accentBg'), s(where, 'accent'), s(' '), ...tabs];
 }
 
 function footer(v: TuiView): Line {
@@ -158,7 +172,7 @@ function footer(v: TuiView): Line {
     usage: '',
     task: 'esc back · m merge · s stop · t retry',
   };
-  return [s(` ${v.connected ? '● live' : '○ reconnecting'} `, v.connected ? 'ok' : 'warn'), s(` ${keys[v.screen]} · : command · w web · q quit`, 'dim')];
+  return [s(` ${v.connected ? '● live' : '○ reconnecting'} `, v.connected ? 'ok' : 'warn'), s(` ${keys[v.screen]} · : command · ${v.project ? 'p this/all projects · ' : ''}w web · q quit`, 'dim')];
 }
 
 function box(title: string, lines: Line[], w: number, h: number, accent = false): Line[] {
@@ -196,7 +210,7 @@ function officeScreen(v: TuiView, state: TuiState, cols: number, rows: number): 
     return [s(` ${a.mood === 'working' ? spin : m.icon} `, m.style), s(a.name, a.mood === 'off' ? 'dim' : 'bold'), s(a.taskId ? ` ${a.taskId}` : '', 'dim')];
   };
   const inRoom = (spots: string[]) => acts.filter((a) => spots.includes(a.spot)).map(person);
-  const count = inboxEntries(state).length;
+  const count = inboxEntries(state, v).length;
   const inPlay = state.tasks.filter((t) => !['done', 'cancelled'].includes(t.status)).length;
 
   // The floor: four rooms, each listing who is in it.
@@ -249,7 +263,7 @@ function sessionLines(events: FeedEvent[], n: number): Line[] {
 }
 
 function boardScreen(v: TuiView, state: TuiState, cols: number, rows: number): Line[] {
-  const columns = boardTasks(state);
+  const columns = boardTasks(state, v);
   const flat = columns.flatMap((c) => c.tasks);
   const selected = flat[v.cursor];
   const w = Math.floor(cols / columns.length);
@@ -267,7 +281,7 @@ function boardScreen(v: TuiView, state: TuiState, cols: number, rows: number): L
 }
 
 function inboxScreen(v: TuiView, state: TuiState, cols: number): Line[] {
-  const items = inboxEntries(state);
+  const items = inboxEntries(state, v);
   if (!items.length) return [[], [s('  Nothing is waiting for you. The team is on it.', 'ok')]];
   const out: Line[] = [[]];
   items.forEach((it, i) => {
@@ -332,7 +346,7 @@ export function render(v: TuiView, cols: number, rows: number): string[] {
     return [paint(header(v, 0), cols, v.color, 'plain'), paint([s(v.connected ? '  Loading…' : '  Connecting to the hub…', 'dim')], cols, v.color), ...Array(Math.max(0, rows - 3)).fill(' '.repeat(cols)), paint(footer(v), cols, v.color)];
   }
   const state = v.state;
-  const count = inboxEntries(state).length;
+  const count = inboxEntries(state, v).length;
   const bodyRows = rows - 2;
   const body =
     v.screen === 'board'
@@ -356,8 +370,8 @@ export function render(v: TuiView, cols: number, rows: number): string[] {
 export function cursorLimit(v: TuiView): number {
   if (!v.state) return 0;
   if (v.screen === 'office') return v.state.agents.length;
-  if (v.screen === 'board') return boardTasks(v.state).flatMap((c) => c.tasks).length;
-  if (v.screen === 'inbox') return inboxEntries(v.state).length;
+  if (v.screen === 'board') return boardTasks(v.state, v).flatMap((c) => c.tasks).length;
+  if (v.screen === 'inbox') return inboxEntries(v.state, v).length;
   if (v.screen === 'activity') return v.feed.length;
   return 0;
 }

@@ -1,0 +1,9 @@
+[package]
+name = "hyde-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Portable deterministic command matching and planning core for Hyde AI"
+
+[lib]
+path = "src/lib.rs"

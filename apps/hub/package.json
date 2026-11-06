@@ -7,8 +7,8 @@
     "hyde": "./src/cli.ts"
   },
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
-    "start": "tsx --env-file-if-exists=../../.env src/main.ts",
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
     "cli": "tsx src/cli.ts"
   },
   "dependencies": {
@@ -19,6 +19,7 @@
     "@hyde/adapter-command": "workspace:*",
     "@hyde/adapter-common": "workspace:*",
     "@hyde/adapter-opencode": "workspace:*",
+    "@hyde/browser-live": "workspace:*",
     "@hyde/core": "workspace:*",
     "@hyde/devflow": "workspace:*",
     "@hyde/gateway-discord": "workspace:*",
@@ -28,6 +29,7 @@
     "@hyde/mcp-harness": "workspace:*",
     "@hyde/node": "workspace:*",
     "@hyde/policy": "workspace:*",
+    "@hyde/skills": "workspace:*",
     "@hyde/workspace": "workspace:*",
     "croner": "10.0.1",
     "hono": "4.13.13",

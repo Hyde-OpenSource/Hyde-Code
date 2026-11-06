@@ -1,0 +1,20 @@
+[package]
+name = "hyde-ai"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+description = "Hyde AI: a local desktop assistant with a deterministic core and optional free AI engine"
+
+[dependencies]
+hyde-core = { path = "../hyde-core" }
+hyde-pack = { path = "../hyde-pack" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+clap = { version = "4.5", features = ["derive"] }
+tiny_http = "0.12"
+ureq = { version = "2.12", features = ["json"] }
+
+[[bin]]
+name = "hyde-ai"
+path = "src/main.rs"

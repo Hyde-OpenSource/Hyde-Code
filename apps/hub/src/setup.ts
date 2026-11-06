@@ -1,14 +1,15 @@
 import { execFile } from 'node:child_process';
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { promisify } from 'node:util';
+import { BUILTIN_TIERS, HYDE_EFFORTS, ROUTING_MODES, type HydeEffort, type RoutingMode } from '@hyde/core';
 import type { RawConfig } from './config.ts';
 import { detectAll, type Detected } from './detect.ts';
 
 const exec = promisify(execFile);
 
-// `pnpm hyde setup`: asks which of the detected tools the owner wants to use. Nothing is
+// `hyde setup`: asks which of the detected tools the owner wants to use. Nothing is
 // compulsory: every agent, gateway and stage is a choice, and the answers become
 // hyde.config.json (settings) and .env (secrets, 0600).
 
@@ -22,7 +23,17 @@ export interface SetupAnswers {
   gateways: { telegram: boolean; slack: boolean; discord: boolean; whatsapp: boolean };
   quietHours?: { start: string; end: string };
   ownerChat?: string;
+  /** Mode and hub-wide effort (defaults: balanced, balanced). */
+  routing?: { mode: RoutingMode; effort: HydeEffort };
 }
+
+/** One line per mode for the setup prompt and the docs. */
+export const MODE_HELP: Record<RoutingMode, string> = {
+  balanced: 'a strong model plans and reviews; code goes to the tier its complexity needs (default)',
+  'claude-only': 'Claude models only, by complexity (opus / sonnet / haiku)',
+  'free-first': 'free models for trivial and low work, Claude for everything else',
+  'assistant-plans': 'the Hyde AI desktop assistant plans its own requests; the CLIs code',
+};
 
 /** Pure: detected tools + answers → raw config (merged into any existing config). */
 export function buildConfig(detected: Detected[], answers: SetupAnswers, existing?: RawConfig): RawConfig {
@@ -51,7 +62,8 @@ export function buildConfig(detected: Detected[], answers: SetupAnswers, existin
     ...existing,
     agents,
     maxConcurrentRuns: Math.max(1, Math.min(agents.length, 3)),
-    planner: { enabled: answers.planner, approvalOver: 3 },
+    planner: { enabled: answers.planner, approvalOver: 3, maxQuestions: 3 },
+    routing: { ...existing?.routing, mode: answers.routing?.mode ?? existing?.routing?.mode ?? 'balanced', effort: answers.routing?.effort ?? existing?.routing?.effort ?? 'balanced' },
     review: { enabled: answers.review, rounds: 2, crossVendor: true },
     browser: { enabled: answers.browser, video: false },
     policy: { enabled: answers.policy, approvalRequired: ['new-dependency'], circuitBreaker: 5 },
@@ -77,7 +89,7 @@ export function upsertEnv(text: string, values: Record<string, string>): string 
   return out;
 }
 
-async function guessProject(path: string): Promise<{ baseBranch: string; checks: string[]; preview?: string }> {
+export async function guessProject(path: string): Promise<{ baseBranch: string; checks: string[]; preview?: string }> {
   const branches: string[] = await exec('git', ['branch', '--list', '--format=%(refname:short)'], { cwd: path }).then((r) => r.stdout.split('\n'), () => []);
   const baseBranch = branches.includes('staging') ? 'staging' : branches.includes('main') ? 'main' : (branches[0] ?? 'main');
   const pkg = join(path, 'package.json');
@@ -89,7 +101,7 @@ async function guessProject(path: string): Promise<{ baseBranch: string; checks:
   return { baseBranch, checks, ...(preview && { preview }) };
 }
 
-export async function runSetup(configFile: string, envFile: string): Promise<void> {
+export async function runSetup(configFile: string, envFile: string, opts: { projectPath?: string } = {}): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const ask = async (q: string, def = ''): Promise<string> => (await rl.question(`${q}${def ? ` [${def}]` : ''} `)).trim() || def;
   const yes = async (q: string, def: boolean): Promise<boolean> => /^y/i.test(await ask(`${q} (y/n)`, def ? 'y' : 'n'));
@@ -111,18 +123,26 @@ export async function runSetup(configFile: string, envFile: string): Promise<voi
       continue;
     }
     if (await yes(` Use ${d.label}?`, ['claude-code', 'codex'].includes(d.id))) {
+      const builtin = d.suggest && BUILTIN_TIERS[d.suggest.adapter];
+      if (builtin) {
+        // Claude gets a model per complexity tier; change them later under "tiers" in Settings.
+        const t = (['high', 'medium', 'low', 'trivial'] as const).map((l) => `${l} ${builtin[l]?.model}/${builtin[l]?.effort}`).join(', ');
+        console.log(`   Models by complexity: ${t}`);
+        agents.push({ id: d.id });
+        continue;
+      }
       const model = await ask(`   Model for ${d.label} (empty = CLI default)`, d.suggest?.model ?? '');
       agents.push({ id: d.id, ...(model && { model }) });
     }
   }
   if (!agents.length) {
-    console.log('\nNo agent selected. Install and sign in to at least one CLI, then run setup again.');
+    console.log('\nNo agent selected. Install and sign in to at least one CLI, then run `hyde` again.');
     rl.close();
-    return;
+    return false;
   }
 
   console.log('\nProject:');
-  const path = resolve(await ask(' Path to the git repo agents will work on', existing?.projects?.[0]?.path ?? process.cwd()));
+  const path = resolve(await ask(' Path to the git repo agents will work on', opts.projectPath ?? existing?.projects?.[0]?.path ?? process.cwd()));
   if (!existsSync(join(path, '.git'))) throw new Error(`${path} is not a git repository`);
   const guess = await guessProject(path);
   const id = await ask(' Short id (used as #id in chat)', basename(path).toLowerCase().replace(/[^a-z0-9.-]+/g, '-'));
@@ -139,6 +159,13 @@ export async function runSetup(configFile: string, envFile: string): Promise<voi
   const review = vendors.size > 1 ? await yes(' Cross-vendor review of every diff?', true) : (console.log(' Cross-vendor review: needs agents from two vendors; skipped.'), false);
   const browser = playwright && guess.preview ? await yes(` Verify UI changes in a browser (${guess.preview})?`, true) : false;
   const policy = await yes(' Policy checks on agent tool calls (protected branches, write scope, approvals)?', true);
+
+  console.log('\nModels by complexity (every task is rated trivial, low, medium or high first):');
+  for (const m of ROUTING_MODES) console.log(`   ${m}: ${MODE_HELP[m]}`);
+  const pick = <T extends string>(value: string, allowed: readonly T[], def: T): T => ((allowed as readonly string[]).includes(value) ? (value as T) : def);
+  const mode = pick(await ask(' Mode', existing?.routing?.mode ?? 'balanced'), ROUTING_MODES, 'balanced');
+  console.log('   Hyde effort: saver (less thinking, saves quota), balanced, max (more thinking), auto (saver when quota runs low)');
+  const effort = pick(await ask(' Hyde effort', existing?.routing?.effort ?? 'balanced'), HYDE_EFFORTS, 'balanced');
 
   console.log('\nChat (tokens go into .env, never into the config):');
   const env: Record<string, string> = {};
@@ -180,13 +207,16 @@ export async function runSetup(configFile: string, envFile: string): Promise<voi
       browser,
       policy,
       gateways,
+      routing: { mode, effort },
       ...(qs && qe && { quietHours: { start: qs.trim(), end: qe.trim() } }),
     },
     existing,
   );
-  writeFileSync(configFile, JSON.stringify(config, null, 2) + '\n');
+  mkdirSync(dirname(configFile), { recursive: true, mode: 0o700 });
+  writeFileSync(configFile, JSON.stringify(existing ? config : { dataDir: 'data', ...config }, null, 2) + '\n');
   const envText = upsertEnv(existsSync(envFile) ? readFileSync(envFile, 'utf8') : '', env);
   writeFileSync(envFile, envText, { mode: 0o600 });
   chmodSync(envFile, 0o600);
-  console.log(`\nSaved ${configFile} and ${envFile}.\nStart the hub with \`pnpm start\`, then \`pnpm hyde dashboard\` for the web console.`);
+  console.log(`\nSaved ${configFile} and ${envFile}.`);
+  return true;
 }

@@ -4,7 +4,7 @@
 > Created: 2026-10-27
 
 ## 1. What this project is
-- **Name:** Hyde Code (the plan's working name was "DevFlow Harness"; the owner chose Hyde Code on 2026-10-27)
+- **Name:** Hyde AI (since 2026-10-30: the Hyde Code hub and the Hyde AI desktop assistant merged into one repo). The hub keeps the name Hyde Code (the plan's working name was "DevFlow Harness"; the owner chose Hyde Code on 2026-10-27).
 - **Purpose / problem it solves:** A self-hosted control plane that drives the official agent CLIs (Claude Code first, Codex next) and owns tasks, worktrees, approvals, chat, UI and memory. "Send a task, get a reviewed PR back." The full plan is in `docs/plan.md`.
 - **Who uses it:** The owner only. **Personal tool** (decided 2026-10-27), so it runs the owner's own signed-in CLIs on the owner's own machine.
 - **Client / owner:** Tirth (GitHub `Tirth1107`), GamifyIAS Management.
@@ -26,6 +26,9 @@
 - **Orchestrator** (`apps/hub/src/orchestrator.ts`) is the only writer of task state. Every change is an event (`packages/core/src/events.ts`); the current state is a pure fold (`projection.ts`). Tick: reconcile stalls, then dispatch ready tasks within concurrency and quota limits.
 - **Task flow (Phase 0):** `/new` → ready → running (worktree + Claude run) → [blocked on question → ready → running (resume, same session)] → verifying (checks) → [ready → running (fix turn)] → blocked on approval A-n (first push) → awaiting_merge (PR opened). Merge is out of scope for Phase 0.
 - **Agent ↔ hub:** every run gets `.hyde/runs/<run>/mcp.json` that launches `packages/mcp-harness/src/main.ts` with a per-run bearer token; tool calls POST to `/api/agent/<tool>`. The token works only while the run is live.
+- **Routing (2026-11-05):** every task gets a complexity level (`task.classified`: rules in `packages/core/src/routing.ts`, then planner, a cheap `classify` run, a client hint, or the owner's `/level`). The router (`apps/hub/src/agents.ts` `route`) picks an agent that serves the job's tier (plan and review one tier up, never a free model; code by level), by `routing.mode` and `routing.effort`; it upgrades or waits, never downgrades (`task.waiting`). `run.dispatched` records tier, model, effort and why.
+- **Question memory:** `apps/hub/src/questions.ts` matches every new question (agent `ask_question` or planner) against the task's and project's questions; repeats get the answer or are linked (`question.matched`). The planner asks only blocking questions up to `planner.maxQuestions`; the rest are `assumptions` on the task.
+- **Recovery:** one nudge after a turn without `complete_task`, then `task.reassigned` one tier up; tasks move off an agent whose quota is out for more than 30 min; a failed planner is retried on another agent (raw output kept as an artifact); the hub claims its port before any side effect (`apps/hub/src/listen.ts`).
 - **Claude adapter** spawns `claude -p ... --output-format stream-json --verbose --permission-mode acceptEdits --permission-prompts none --strict-mcp-config` with a scrubbed env (allowlist), stops with SIGINT, resumes with `--resume <session>`, and stops a run early if the `hyde` MCP server failed to connect.
 
 ## 4. Folder map
@@ -35,6 +38,8 @@
 - `packages/adapters/claude-code/`: Claude Code adapter; `src/fixtures/` has sanitized recorded streams from CLI 2.1.310 and a fake `claude` binary for tests.
 - `packages/workspace/`, `packages/policy/`, `packages/devflow/`, `packages/mcp-harness/`, `packages/gateways/telegram/`: see README.
 - `.hyde/` (gitignored, runtime): `events.db`, `worktrees/`, `runs/`, `owner-token`, `callback-secret`, `telegram-paired.json`.
+- `packages/core/src/routing.ts`: complexity levels, rule classifier, tier tables, effort shifts (also exported as `@hyde/core/routing` for the dashboard). `apps/hub/src/questions.ts`: question memory. `apps/hub/src/listen.ts`: port claim.
+- Client API for local apps (Hyde AI): `docs/api.md` (apiVersion 2 since 2026-11-05). Client tokens in `<dataDir>/clients/<name>.token` (`apps/hub/src/clients.ts`); the running hub writes `~/.hyde/hub.json`. API version in `apps/hub/src/version.ts`.
 
 ## 5. How to run, build, test
 - **Install:** `corepack enable pnpm && pnpm install`
@@ -79,6 +84,9 @@
 - `gh pr create` is untested against a real GitHub repo (no remote yet). The push path is tested against a local bare remote.
 - Agent allow rules are per command prefix; compound shell commands (`a && b`) are denied under `--permission-prompts none`. That's safe, and agents retry with separate commands.
 - Progress notes (`report_progress`) are sent immediately, not batched into digests.
+- Question matching is word-based, not semantic: a question reworded with entirely different words is still asked again.
+- Codex tiers use gpt-6-astra and gpt-6.1-sol, which the owner chose but `codex debug models` (0.162.1) doesn't list (only gpt-6-luna is there); not run yet. Harness Codex runs use `--ignore-user-config`.
+- The dashboard's `manifest.webmanifest` gives a console syntax error (since c4bfb6c); not looked into yet.
 - Claude Code CLI ships weekly; stream format changes are caught by the fixture tests only after re-recording.
 
 ## 10. Glossary
@@ -90,6 +98,15 @@
 - Hub modules: agents.ts (pool, router), planner.ts, review.ts, policy-engine.ts, notifier.ts, browser.ts, nodes.ts, schedules.ts, plugins.ts, metrics.ts, setup.ts, detect.ts, http.ts (API + dashboard), orchestrator.ts.
 - Dashboard: apps/web (React + Vite), served by the hub from apps/web/dist; `pnpm hyde dashboard` prints the login link.
 - Local test config: hyde.config.json (gitignored) runs claude-1 (haiku), codex-1, opencode-1 (free model) on this repo with base `staging`.
+- Since 2026-11-05 (branch agent-hyde-autonomy/feature/smart-routing): complexity tiers, modes (balanced, claude-only, free-first, assistant-plans) and Hyde effort (saver, balanced, max, auto); claude-code profiles without `tiers` use opus/sonnet/haiku (so the owner's `"model": "haiku"` is no longer used for everything), codex profiles use gpt-6-astra/gpt-6.1-sol/gpt-6-luna (owner, 2026-11-06), and every `opencode/*` model counts as free. See README "Tiers, modes and effort".
 
 ## 11. Open questions for the user
 - Telegram bot token and the owner's Telegram user id (or use `/pair`).
+
+## 13. Hyde AI desktop assistant (merged 2026-10-30)
+- **Where:** `apps/desktop`, its own Cargo workspace: `crates/hyde-core` (deterministic matcher, no deps), `crates/hyde-pack` (TOML → pack), `crates/hyde-ai` (binary `hyde-ai`: tiny_http UI on 127.0.0.1:7878, ureq AI client, executor, tool installer, Hyde Code bridge `src/hydecode.rs`). Built-in commands in `apps/desktop/data/` (embedded at build time). UI is plain HTML/CSS/JS in `crates/hyde-ai/ui`.
+- **Origin:** built 2026-10-29 as "Hyde Agent" in `E:/PROJECTS 2/Hyde Agent` (no git history there), copied in on branch `feature/hyde-ai`.
+- **Bridge:** reads `~/.hyde/config.json` + `<dataDir>/owner-token`, calls `/api/health`, `/api/state`, `/api/commands`, `/login`; starts the hub with `hyde hub start`. Contract and roadmap: `docs/HYDE_AI.md`.
+- **Commands:** `hyde ai` (window), `hyde ai doctor|run|install`, `pnpm desktop`, `pnpm desktop:test`, `pnpm desktop:lint`, `pnpm desktop:install`; `./scripts/install.sh` installs both parts.
+- **Config:** `~/.config/hyde-ai/config.toml` (0600: AI provider, key, default Hyde Code project), extra intents in `~/.config/hyde-ai/intents/`.
+- **Toolchain:** Rust stable via rustup in the owner's home (`source ~/.cargo/env`).

@@ -1,7 +1,8 @@
+import type { Complexity } from './routing.ts';
 // What any chat gateway (Telegram, Slack, Discord, WhatsApp, the web dashboard) exchanges with the hub.
 
 export type Command =
-  | { kind: 'new'; text: string; project?: string; agent?: string }
+  | { kind: 'new'; text: string; project?: string; agent?: string; complexity?: Complexity }
   | { kind: 'client'; text: string; project?: string }
   | { kind: 'status' }
   | { kind: 'agents' }
@@ -14,6 +15,13 @@ export type Command =
   | { kind: 'merge'; taskId: string }
   | { kind: 'promote'; project?: string }
   | { kind: 'retry'; taskId: string }
+  | { kind: 'level'; taskId: string; level: Complexity }
+  | { kind: 'skills'; taskId?: string; add: string[]; remove: string[] }
+  | { kind: 'skill'; skillId: string; approved: boolean }
+  | { kind: 'todos'; taskId: string }
+  | { kind: 'undo'; taskId: string }
+  | { kind: 'template'; name?: string; args: string; project?: string; agent?: string }
+  | { kind: 'plan'; taskId: string; on?: boolean }
   | { kind: 'lesson'; lessonId: string; approved: boolean }
   | { kind: 'help' };
 
@@ -32,7 +40,8 @@ export type ButtonAction =
   | { kind: 'answer'; questionId: string; option: number }
   | { kind: 'decide'; approvalId: string; approved: boolean }
   | { kind: 'merge'; taskId: string }
-  | { kind: 'lesson'; lessonId: string; approved: boolean };
+  | { kind: 'lesson'; lessonId: string; approved: boolean }
+  | { kind: 'skill'; skillId: string; approved: boolean };
 
 export interface OutboundMessage {
   text: string;
@@ -53,4 +62,4 @@ export interface ChatGateway {
 }
 
 /** The harness MCP tools agents may call through POST /api/agent/:tool. */
-export const TOOLS_NAMES = ['ask_question', 'report_progress', 'complete_task', 'request_approval', 'propose_lesson'] as const;
+export const TOOLS_NAMES = ['ask_question', 'report_progress', 'complete_task', 'request_approval', 'propose_lesson', 'propose_skill', 'update_todos'] as const;

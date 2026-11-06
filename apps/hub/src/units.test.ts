@@ -128,7 +128,7 @@ describe('workflow', () => {
     const { settings, template } = parseWorkflow(text);
     expect(settings.checks).toEqual(['npm test']);
     expect(template).toBe('You are working on {{ task.title }} in {{ project.name }}.');
-    const project = { id: 'x', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [] };
+    const project = { id: 'x', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [], browserAllow: [] };
     const w = applyWorkflow(project, text);
     expect(w.project).toMatchObject({ checks: ['npm test'], agents: ['codex-1'], preview: { command: 'npm run dev -- --port $PORT', url: 'http://127.0.0.1:$PORT', paths: ['/'] } });
     expect(applyWorkflow({ ...project, checks: ['make'] }, text).project.checks).toEqual(['make']);
@@ -176,17 +176,17 @@ describe('router', () => {
     usable: () => true,
     vendor: (n: string) => vendors[n],
   } as unknown as AgentPool;
-  const config = { quotaSoftCeiling: 0.8, review: { crossVendor: true } } as never;
-  const project = { id: 'demo', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [] };
+  const config = { quotaSoftCeiling: 0.8, review: { crossVendor: true }, routing: { mode: 'balanced', effort: 'balanced', classifier: true } } as never;
+  const project = { id: 'demo', path: '/x', baseBranch: 'staging', releaseBranch: 'main', checks: [], browserAllow: [] };
   const task = { id: 'T-1', role: 'ui', dependsOn: [], writeScope: [] } as never;
 
   it('prefers role fit, respects quota and concurrency, and picks a different vendor to review', () => {
     const state = emptyState();
-    expect(route({ task, mode: 'start', project, state, pool, config, now: 0 })).toEqual({ agent: 'claude-1' });
-    expect(route({ task, mode: 'review', project, state, pool, config, now: 0, author: 'claude-1' })).toEqual({ agent: 'codex-1' });
+    expect(route({ task, mode: 'start', project, state, pool, config, now: 0 })).toMatchObject({ agent: 'claude-1' });
+    expect(route({ task, mode: 'review', project, state, pool, config, now: 0, author: 'claude-1' })).toMatchObject({ agent: 'codex-1' });
     apply(state, { seq: 1, ts: '', type: 'quota.updated', actor: { kind: 'harness', id: 'h' }, payload: { account: 'acc-claude', window: 'five_hour', status: 'rejected', utilization: 1 } });
     expect(accountQuota(state, 'acc-claude', 0).blocked).toBe('five_hour limit reached');
-    expect(route({ task, mode: 'start', project, state, pool, config, now: 0 })).toEqual({ agent: 'codex-1' });
+    expect(route({ task, mode: 'start', project, state, pool, config, now: 0 })).toMatchObject({ agent: 'codex-1' });
     apply(state, { seq: 2, ts: '', type: 'run.dispatched', actor: { kind: 'harness', id: 'h' }, payload: { runId: 'run-1', taskId: 'T-9', attempt: 1, adapter: 'codex', account: 'acc-codex', agent: 'codex-1', node: 'local', mode: 'start' } });
     expect(route({ task, mode: 'start', project, state, pool, config, now: 0 })).toEqual({ wait: 'codex-1 is busy' });
     expect(route({ task, mode: 'review', project, state, pool, config, now: 0, author: 'codex-1' })).toMatchObject({ wait: expect.any(String) });

@@ -2,10 +2,10 @@ import { spawn } from 'node:child_process';
 import type { Command, FeedEvent } from '@hyde/core';
 import { SCREENS, boardTasks, cursorLimit, inboxEntries, render, type TuiState, type TuiView } from './tui-render.ts';
 
-// `pnpm hyde tui`: the office in the terminal. It talks to the running hub over the same HTTP API
+// `hyde tui`: the office in the terminal. It talks to the running hub over the same HTTP API
 // as the web dashboard (owner token), so both views stay in step.
 
-export async function runTui(base: string, token: string): Promise<void> {
+export async function runTui(base: string, token: string, opts: { project?: string } = {}): Promise<void> {
   const out = process.stdout;
   const input = process.stdin;
   if (!out.isTTY || !input.isTTY) {
@@ -14,7 +14,7 @@ export async function runTui(base: string, token: string): Promise<void> {
     return;
   }
   const auth = { authorization: `Bearer ${token}` };
-  const view: TuiView = { state: null, feed: [], screen: 'office', cursor: 0, session: [], connected: false, tick: 0, color: !process.env.NO_COLOR };
+  const view: TuiView = { state: null, feed: [], screen: 'office', cursor: 0, session: [], connected: false, tick: 0, color: !process.env.NO_COLOR, ...(opts.project && { project: opts.project }), allProjects: !opts.project };
   let closed = false;
   let flashTimer: NodeJS.Timeout | undefined;
 
@@ -143,13 +143,13 @@ export async function runTui(base: string, token: string): Promise<void> {
   };
 
   const openWeb = () => {
-    const url = `${base}/login?token=${token}`;
+    const url = `${base}/login?token=${token}${view.project ? `&project=${encodeURIComponent(view.project)}` : ''}`;
     const [cmd, args] = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
     try {
       spawn(cmd, args as string[], { stdio: 'ignore', detached: true }).unref();
       flash('Opened the web office in your browser.');
     } catch {
-      flash(`Open ${base} in a browser (pnpm hyde dashboard prints a login link).`);
+      flash(`Open ${base} in a browser (hyde web prints a login link).`);
     }
   };
 
@@ -161,7 +161,7 @@ export async function runTui(base: string, token: string): Promise<void> {
   };
   let onSubmit: ((text: string) => void) | undefined;
 
-  const project = () => view.state?.projects[0]?.id;
+  const project = () => view.project ?? view.state?.projects[0]?.id;
 
   const onKey = (key: string) => {
     if (view.input) {
@@ -202,7 +202,7 @@ export async function runTui(base: string, token: string): Promise<void> {
       case '4':
       case '5':
         if (view.screen === 'inbox' && s) {
-          const it = inboxEntries(s)[view.cursor];
+          const it = inboxEntries(s, view)[view.cursor];
           const n = Number(key) - 1;
           if (it?.kind === 'question' && it.options[n] !== undefined) {
             void command({ kind: 'answer', questionId: it.id, text: `#option:${n}` });
@@ -234,14 +234,14 @@ export async function runTui(base: string, token: string): Promise<void> {
         break;
       case '\r':
         if (view.screen === 'board' && s) {
-          const t = boardTasks(s).flatMap((c) => c.tasks)[view.cursor];
+          const t = boardTasks(s, view).flatMap((c) => c.tasks)[view.cursor];
           if (t) {
             view.screen = 'task';
             view.taskId = t.id;
             void loadSession().then(draw);
           }
         } else if (view.screen === 'inbox' && s) {
-          const it = inboxEntries(s)[view.cursor];
+          const it = inboxEntries(s, view)[view.cursor];
           if (it?.taskId) {
             view.screen = 'task';
             view.taskId = it.taskId;
@@ -262,11 +262,18 @@ export async function runTui(base: string, token: string): Promise<void> {
       case 'w':
         openWeb();
         break;
+      case 'p':
+        if (view.project) {
+          view.allProjects = !view.allProjects;
+          view.cursor = 0;
+          flash(view.allProjects ? 'Showing all projects.' : `Showing #${view.project} only.`);
+        }
+        break;
       case 'a':
       case 'd':
       case 'r': {
         if (view.screen !== 'inbox' || !s) break;
-        const it = inboxEntries(s)[view.cursor];
+        const it = inboxEntries(s, view)[view.cursor];
         if (!it) break;
         if (it.kind === 'question') {
           if (key === 'r' || key === 'a') ask(`answer ${it.id}`, (text) => void command({ kind: 'answer', questionId: it.id, text }));
@@ -280,7 +287,7 @@ export async function runTui(base: string, token: string): Promise<void> {
         break;
       case 's':
       case 't': {
-        const id = view.screen === 'task' ? view.taskId : view.screen === 'board' && s ? boardTasks(s).flatMap((c) => c.tasks)[view.cursor]?.id : undefined;
+        const id = view.screen === 'task' ? view.taskId : view.screen === 'board' && s ? boardTasks(s, view).flatMap((c) => c.tasks)[view.cursor]?.id : undefined;
         if (id) void command(key === 's' ? { kind: 'stop', target: id } : { kind: 'retry', taskId: id });
         break;
       }

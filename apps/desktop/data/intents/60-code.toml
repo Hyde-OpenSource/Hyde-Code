@@ -1,0 +1,85 @@
+# Hyde Code: hand coding work to the agent hub (Claude Code, Codex, OpenCode).
+# Say the project at the end ("… in gamify ias lms") or set a default project in the Hyde Code tab.
+# Pin an agent with "… using codex" / "… with opencode".
+
+[[intent]]
+id = "code_task"
+risk = "L2"
+action = "code.task"
+response = "Assigning to Hyde Code"
+triggers = ["hyde code", "code", "assign", "task", "coding"]
+patterns = [
+  "hyde code {task*}",
+  "ask hyde code to {task*}",
+  "tell hyde code to {task*}",
+  "have hyde code {task*}",
+  "code {task*}",
+  "assign {task*}",
+  "new task {task*}",
+  "new coding task {task*}",
+  "create a task to {task*}",
+  "create task {task*}",
+  "create a coding task to {task*}",
+]
+
+[[intent]]
+id = "code_status"
+risk = "L0"
+action = "code.status"
+triggers = ["status", "doing", "tasks", "waiting", "needs"]
+patterns = [
+  "hyde code status",
+  "code status",
+  "coding status",
+  "task status",
+  "what is hyde code doing",
+  "what are the agents doing",
+  "what are my agents doing",
+  "show tasks",
+  "show my tasks",
+  "what needs me",
+  "what is waiting for me",
+]
+
+[[intent]]
+id = "code_control"
+risk = "L2"
+action = "code.control"
+triggers = ["approve", "deny", "merge", "stop", "retry"]
+patterns = [
+  "{verb:approve|deny|merge|stop|retry} {ref*}",
+  "{verb:approve|deny|merge|stop|retry} task {ref*}",
+]
+
+[[intent]]
+id = "code_answer"
+risk = "L2"
+action = "code.answer"
+triggers = ["answer", "reply"]
+patterns = [
+  "answer q {number} {answer*}",
+  "answer question {number} {answer*}",
+  "reply to q {number} {answer*}",
+]
+
+[[intent]]
+id = "code_open"
+risk = "L0"
+action = "code.open"
+response = "Opening the Hyde Code office"
+triggers = ["hyde code", "office"]
+patterns = [
+  "open hyde code",
+  "show hyde code",
+  "open the office",
+  "open hyde office",
+  "hyde code dashboard",
+  "open hyde code dashboard",
+]
+
+[[intent]]
+id = "code_start"
+risk = "L0"
+action = "code.start"
+triggers = ["hyde code", "hub"]
+patterns = ["start hyde code", "start the hub", "start hyde hub", "start the hyde code hub", "run hyde code"]

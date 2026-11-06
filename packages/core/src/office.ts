@@ -52,6 +52,24 @@ export function agentActivity(state: State, agent: OfficeAgent): AgentActivity {
   return { ...base, mood: 'idle', spot: 'coffee', line: 'Free for work' };
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  telegram: 'Telegram',
+  slack: 'Slack',
+  discord: 'Discord',
+  whatsapp: 'WhatsApp',
+  web: 'web',
+  cli: 'terminal',
+  api: 'API',
+  schedule: 'schedule',
+  planner: 'planner',
+  'hyde-ai': 'Hyde AI',
+};
+
+/** Where a task came from, in words: "Hyde AI", "Telegram", "terminal". */
+export function sourceLabel(kind: string): string {
+  return SOURCE_LABELS[kind] ?? kind;
+}
+
 /** Open questions, approvals and lessons whose task is still in play. */
 export function openItems(state: State) {
   const live = (taskId: string | undefined) => !taskId || !TERMINAL.includes(state.tasks.find((t) => t.id === taskId)?.status ?? 'done');
@@ -87,7 +105,7 @@ export function describeEvent(e: FeedEvent): string | null {
     case 'task.planned':
       return p.children?.length > 1 ? `${t} split into ${p.children.length} tasks` : `${t} planned`;
     case 'run.dispatched':
-      return `${p.agent} picked up ${t} (${String(p.mode).replace('_', ' ')})`;
+      return `${p.agent} picked up ${t} (${String(p.mode).replace('_', ' ')}${p.model ? `, ${p.model}` : ''})`;
     case 'question.asked':
       return `${t} asks: ${p.text}`;
     case 'question.answered':
@@ -114,6 +132,10 @@ export function describeEvent(e: FeedEvent): string | null {
       return `${p.by} proposes a lesson: ${p.text}`;
     case 'agent.progress':
       return `${t}: ${p.message}`;
+    case 'browser.action':
+      return `${t} browser ${p.step}: ${p.label}${p.ok === false ? ' (failed)' : ''}`;
+    case 'task.classified':
+      return `${t} is ${p.level} (${p.by})`;
     case 'node.connected':
       return `Worker ${p.nodeId} connected from ${p.host}`;
     case 'node.disconnected':
