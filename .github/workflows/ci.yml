@@ -16,6 +16,7 @@ jobs:
       - run: corepack enable pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - run: pnpm --filter @hyde/browser-live exec playwright install --with-deps chromium-headless-shell
       - run: pnpm test
       - run: pnpm build
 
