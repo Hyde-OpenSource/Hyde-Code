@@ -18,6 +18,16 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-11-06: Diff comments, checkpoints and undo, task templates, session export (T-010)
+- **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **What:** (1) Diff comments: the task page's diff has a comment button on every line (new-side line numbers from the hunk headers), an inline form, and a list of comments with "Send to agent". Sending starts a `review_fix` turn in the author's own session with every open comment (`task.comment_added`, `task.comments_sent`; owner-only `POST /api/tasks/:id/comments` and `/comments/send`). (2) Checkpoints: before each agent turn the hub records HEAD plus a `git stash create` commit of uncommitted changes (kept under `refs/hyde/checkpoints/T-n/run-n` so git won't prune it). `/undo T-n` and the "Undo last turn" button put the worktree back to before the last turn (reset, clean, re-apply the stash). The task returns to ready, and the next turn tells the agent its last turn was undone. Undo is refused while a run is live or after the branch has a PR. (3) Task templates: `.hyde/commands/<name>.md` in a project (or `~/.hyde/commands/`) with front matter (description, level, agent) and `$ARGUMENTS`. `/run <name> args #project @agent` and `/commands` work from every intake, since they go through the same command path (clients may use them). (4) Export: `GET /api/tasks/:id/export?format=md|html` (owner) and an Export button build the task's request, checklist, assumptions, runs with model, tokens and cost, result and timeline from the event log. Secrets are redacted (API keys, GitHub, Slack, AWS and Telegram tokens, private keys, and labelled password, token or secret values).
+- **Why:** docs/roadmap-v2.md section 5.
+- **Files:** packages/core/src/{events,projection,chat,commands}.ts, apps/hub/src/{orchestrator,http,clients,templates,export,review-tools.test}.ts, apps/web/src/{api.ts,styles.css,pages/TaskPage.tsx}
+- **Verified:** `pnpm typecheck` clean, `pnpm test` 221/221. New tests: owner comments reach the agent as a resumed review_fix turn (client token refused, empty sends handled); checkpoint plus `/undo` removes a committed file and an uncommitted one, and the redo turn hears about the undo; templates parse, expand and create tasks with their level; exports redact a password in the request. Playwright screenshots on a scratch hub (a `command` agent that commits an edit; no model): diff with the comment form, comment list, Send to agent, Undo last turn and Export at 1440 px; transcript and diff at 390 px. Scratch data deleted.
+- **Found:** task branch names are made from the title, so a secret typed into a request also ends up in the branch name, in git and on the remote after a push. Exports now hide the branch slug when the request had something redacted. The branch naming itself is unchanged; that's a question for the owner (Q-006).
+- **Open / follow-ups:** "Replay a task" is the export plus the timeline; there's no step-by-step replay player.
+
 ### 2026-11-06: Live activity: todos, plan then build, files touched (T-009)
 - **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
 - **Branch:** agent-hyde-autonomy/feature/smart-routing

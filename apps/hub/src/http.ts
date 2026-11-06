@@ -19,6 +19,7 @@ import { TILE_FILES, tilePath } from './tiles.ts';
 import { TERMS_URL, TERMS_VERSION, trustFolder } from './home.ts';
 import { addProject, isGitRepo, removeProject } from './projects.ts';
 import { CLIENT_COMMANDS, OWNER_ONLY_APPROVALS, type ClientName } from './clients.ts';
+import { exportHtml, exportMarkdown } from './export.ts';
 import type { LiveMessage } from './live.ts';
 import type { Orchestrator } from './orchestrator.ts';
 import { buildSummary } from './summary.ts';
@@ -56,6 +57,7 @@ const taskBody = z.object({
   complexity: z.enum(COMPLEXITY_LEVELS).optional(),
 });
 const levelBody = z.object({ level: z.enum(COMPLEXITY_LEVELS) });
+const commentBody = z.object({ file: z.string().trim().min(1).max(500), line: z.number().int().min(1).optional(), text: z.string().trim().min(1).max(5000) });
 const liveBody = z.union([z.object({ action: z.enum(['pause', 'resume']) }), z.object({ action: z.literal('click'), x: z.number().min(0).max(10_000), y: z.number().min(0).max(10_000) })]);
 const answerBody = z.union([z.object({ text: z.string().trim().min(1).max(10_000) }), z.object({ option: z.number().int().min(0).max(9) })]);
 const decisionBody = z.object({ decision: z.enum(['approve', 'deny']) });
@@ -328,6 +330,34 @@ export function createApi(deps: ApiDeps): Hono {
     if (a.action === 'click') orchestrator.browserLive.takeOver(id, a.x, a.y);
     else orchestrator.browserLive.setPaused(id, a.action === 'pause');
     return c.json({ ok: true, paused: orchestrator.browserLive.isPaused(id) });
+  });
+
+  // Diff comments (owner): add one, or send the open ones to the agent as a review_fix turn.
+  app.post('/api/tasks/:id/comments', owner, async (c) => {
+    const id = (c.req.param('id') ?? '').toUpperCase();
+    if (!orchestrator.state.tasks.has(id)) return c.json({ error: `No task ${id}.`, code: 'not_found' }, 404);
+    const body = commentBody.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: 'send {"file": "src/a.ts", "line"?: 12, "text": "..."}', code: 'invalid' }, 400);
+    const comment = { file: body.data.file, text: body.data.text, ...(body.data.line !== undefined && { line: body.data.line }) };
+    return c.json({ id: orchestrator.addComment(id, comment, 'web:owner') }, 201);
+  });
+
+  app.post('/api/tasks/:id/comments/send', owner, (c) => {
+    const id = (c.req.param('id') ?? '').toUpperCase();
+    if (!orchestrator.state.tasks.has(id)) return c.json({ error: `No task ${id}.`, code: 'not_found' }, 404);
+    return c.json({ text: orchestrator.sendComments(id, 'web:owner') });
+  });
+
+  // Export a task's session (owner), secrets redacted.
+  app.get('/api/tasks/:id/export', owner, (c) => {
+    const id = (c.req.param('id') ?? '').toUpperCase();
+    if (!orchestrator.state.tasks.has(id)) return c.json({ error: `No task ${id}.`, code: 'not_found' }, 404);
+    const events = store.list({ taskId: id });
+    const html = c.req.query('format') === 'html';
+    const body = html ? exportHtml(orchestrator.state, id, events) : exportMarkdown(orchestrator.state, id, events);
+    c.header('content-type', html ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8');
+    c.header('content-disposition', `attachment; filename="${id}.${html ? 'html' : 'md'}"`);
+    return c.body(body);
   });
 
   app.get('/api/tasks/:id/files', ownerOrClient, async (c) => c.json({ files: await orchestrator.filesTouched((c.req.param('id') ?? '').toUpperCase()) }));

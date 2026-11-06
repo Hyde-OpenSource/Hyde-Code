@@ -154,15 +154,89 @@ function Work({ task, lastSeq, refresh, notify }: { task: PageProps['state']['ta
   );
 }
 
-function Diff({ text }: { text: string }) {
+/** Each diff line with the file and new-side line number it belongs to, for inline comments. */
+function diffRows(text: string): { line: string; file?: string; num?: number }[] {
+  let file: string | undefined;
+  let num = 0;
+  return text.split('\n').map((line) => {
+    if (line.startsWith('+++ ')) file = line.slice(4).replace(/^b\//, '');
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
+    if (hunk) {
+      num = Number(hunk[1]) - 1;
+      return { line };
+    }
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ')) return { line };
+    if (line.startsWith('-')) return { line, ...(file && { file }) };
+    num += 1;
+    return { line, ...(file && { file, num }) };
+  });
+}
+
+/** The diff with "comment" on every line; comments go to the agent with "Send to agent". */
+function Diff({ text, task, notify, refresh }: { text: string; task: PageProps['state']['tasks'][number] } & Pick<PageProps, 'notify' | 'refresh'>) {
+  const [at, setAt] = useState<{ file: string; num?: number } | null>(null);
+  const [draft, setDraft] = useState('');
+  const rows = diffRows(text);
+  const open = task.comments.filter((c) => c.sentSeq === undefined);
+  const save = async () => {
+    if (!at || !draft.trim()) return;
+    try {
+      await api.comment(task.id, { file: at.file, ...(at.num && { line: at.num }), text: draft.trim() });
+      setDraft('');
+      setAt(null);
+      refresh();
+    } catch (err) {
+      notify(`Failed: ${(err as Error).message}`);
+    }
+  };
   return (
-    <pre className="diff">
-      {text.split('\n').map((line, i) => (
-        <div key={i} className={line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : line.startsWith('@@') ? 'hunk' : ''}>
-          {line || ' '}
+    <>
+      {task.comments.length > 0 && (
+        <div className="card stack comments">
+          <div className="spread">
+            <strong>Your comments ({open.length} not sent)</strong>
+            <button type="button" className="btn primary" disabled={!open.length} onClick={() => api.sendComments(task.id).then((r) => (notify(r.text), refresh()), (e: Error) => notify(e.message))}>
+              Send to agent
+            </button>
+          </div>
+          {task.comments.map((c) => (
+            <div key={c.id} className="meta">
+              {c.sentSeq ? '✓ ' : ''}
+              <span className="mono">
+                {c.file}
+                {c.line ? `:${c.line}` : ''}
+              </span>{' '}
+              {c.text}
+            </div>
+          ))}
         </div>
-      ))}
-    </pre>
+      )}
+      <pre className="diff">
+        {rows.map((r, i) => (
+          <div key={i} className={`${r.line.startsWith('+') && !r.line.startsWith('+++') ? 'add' : r.line.startsWith('-') && !r.line.startsWith('---') ? 'del' : r.line.startsWith('@@') ? 'hunk' : ''} diff-row`}>
+            {r.file && (
+              <button type="button" className="diff-comment" aria-label={`Comment on ${r.file}${r.num ? ` line ${r.num}` : ''}`} onClick={() => setAt({ file: r.file!, ...(r.num && { num: r.num }) })}>
+                +
+              </button>
+            )}
+            {r.line || ' '}
+            {at && at.file === r.file && at.num === r.num && (
+              <div className="diff-form" onClick={(e) => e.stopPropagation()}>
+                <textarea aria-label="Comment" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="What should the agent change here?" rows={2} />
+                <div className="row">
+                  <button type="button" className="btn primary" onClick={() => void save()}>
+                    Add comment
+                  </button>
+                  <button type="button" className="btn" onClick={() => setAt(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </pre>
+    </>
   );
 }
 
@@ -218,6 +292,10 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
           )}
           {(task.status === 'failed' || task.blockedBy?.kind === 'incident') && <CommandButton command={{ kind: 'retry', taskId: task.id }} label="Retry" refresh={refresh} notify={notify} />}
           {open && task.status !== 'awaiting_merge' && <CommandButton command={{ kind: 'stop', target: task.id }} label="Stop" kind="danger" refresh={refresh} notify={notify} />}
+          {task.checkpoints.length > 0 && !task.prUrl && !runs.some((r) => r.state === 'running') && open && <CommandButton command={{ kind: 'undo', taskId: task.id }} label="Undo last turn" refresh={refresh} notify={notify} />}
+          <a className="btn" href={`/api/tasks/${task.id}/export?format=md`}>
+            Export
+          </a>
         </div>
       </div>
 
@@ -390,7 +468,7 @@ export function TaskPage({ id, state, refresh, notify }: PageProps & { id: strin
           </button>
         )}
       </h2>
-      {diff !== null && (diff ? <Diff text={diff} /> : <div className="empty">No changes against {task.baseBranch}.</div>)}
+      {diff !== null && (diff ? <Diff text={diff} task={task} notify={notify} refresh={refresh} /> : <div className="empty">No changes against {task.baseBranch}.</div>)}
     </>
   );
 }

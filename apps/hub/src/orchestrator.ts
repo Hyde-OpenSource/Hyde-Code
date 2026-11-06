@@ -53,6 +53,7 @@ import { needsApproval } from '@hyde/browser-live';
 import { copyFileSync, rmSync } from 'node:fs';
 import { LiveBrowser } from './live.ts';
 import { findMatch, questionOf } from './questions.ts';
+import { expandTemplate, loadTemplates } from './templates.ts';
 import { readWorkflow, renderTemplate, type Workflow } from './workflow.ts';
 
 const HARNESS: Actor = { kind: 'harness', id: 'hub' };
@@ -426,6 +427,7 @@ export class Orchestrator {
       );
     }
 
+    if (!readOnly) await this.checkpoint(this.state.tasks.get(task.id)!, runId, host);
     const policy = compileProfile(DEFAULT_DEV_PROFILE);
     // Agents on a teammate's node reach the hub through its public (Tailscale) URL.
     const hubUrl = profile.node === 'local' ? this.deps.hubUrl : (this.config.nodes.publicUrl ?? this.deps.hubUrl);
@@ -532,6 +534,22 @@ export class Orchestrator {
               ...answers.map((q) => `The owner answered ${q.id} ("${q.text}"): ${q.answer}`),
               ...decisions.map((a) => `The owner ${a.status} ${a.id} (${a.summary}).${a.status === 'approved' ? ' You may go ahead with it now.' : ' Do not do it; find another way or ask.'}`),
             ].join('\n') + '\nContinue the task.',
+        };
+      }
+      const comments = task.comments.filter((c) => (c.sentSeq ?? 0) > since);
+      if (comments.length) {
+        return {
+          mode: 'review_fix',
+          prompt:
+            'The owner reviewed your diff and left these comments:\n' +
+            comments.map((c) => `- ${c.file}${c.line ? `:${c.line}` : ''}: ${c.text}`).join('\n') +
+            '\n\nAddress each one (or explain with ask_question why not), verify, commit, and call complete_task again.',
+        };
+      }
+      if (task.undone && task.undone.seq > since) {
+        return {
+          mode: 'continue',
+          prompt: `The owner undid your last turn (${task.undone.runId}): the worktree is back to commit ${task.undone.head.slice(0, 7)} and the changes from that turn are gone. Check \`git status\` and \`git log\`, then continue the task in a different way. When done, commit and call complete_task.`,
         };
       }
       if (task.checks && !task.checks.ok && task.checks.seq > since) {
@@ -803,6 +821,84 @@ export class Orchestrator {
       text: `⏳ ${task.id} waits: ${reason}. Its ${job === 'code' ? `${level} work` : `${job} step`} needs that tier, so it is not moved to a weaker model. /level ${task.id} <level> changes the tier.`,
       priority: 'digest',
     });
+  }
+
+  // ---------------------------------------------------------------- checkpoints, comments, templates
+
+  /** Records the worktree before an agent turn: HEAD, plus a stash commit of uncommitted changes kept under refs/hyde. */
+  private async checkpoint(task: TaskView, runId: string, host: HostOps): Promise<void> {
+    if (!task.worktree) return;
+    try {
+      const head = await host.run(task.worktree, 'git rev-parse HEAD', 30_000);
+      if (!head.ok) return;
+      const stash = await host.run(task.worktree, 'git stash create', 30_000);
+      const sha = stash.ok ? stash.output.trim() : '';
+      if (sha) await host.run(task.worktree, `git update-ref ${JSON.stringify(`refs/hyde/checkpoints/${task.id}/${runId}`)} ${sha}`, 30_000);
+      this.append({ type: 'task.checkpoint', taskId: task.id, runId, payload: { taskId: task.id, runId, head: head.output.trim(), ...(sha && { stash: sha }) } });
+    } catch (err) {
+      this.log(`${task.id}: checkpoint failed: ${(err as Error).message}`);
+    }
+  }
+
+  /** `/undo T-n`: puts the worktree back to before the agent's last turn. */
+  private async undo(taskId: string, inbound: Inbound, actor: Actor): Promise<string> {
+    const task = this.state.tasks.get(taskId);
+    if (!task) return `No task ${taskId}.`;
+    if (this.runningFor(task.id)) return `${task.id} has a run in progress; /stop ${task.id} first.`;
+    if (task.prUrl) return `${task.id} already has a PR (${task.prUrl}); undo isn't possible after the push.`;
+    if (!['ready', 'blocked', 'failed', 'awaiting_merge', 'verifying', 'review'].includes(task.status)) return `${task.id} is ${task.status}; nothing to undo.`;
+    const cp = [...task.checkpoints].reverse().find((c) => !task.undone || c.seq < task.undone.seq || c.runId !== task.undone.runId);
+    if (!cp || !task.worktree) return `${task.id} has no checkpoint to go back to.`;
+    const host = this.deps.host(task.node ?? 'local');
+    const steps = [`git reset --hard ${cp.head}`, 'git clean -fd', ...(cp.stash ? [`git stash apply ${cp.stash}`] : [])];
+    for (const step of steps) {
+      const r = await host.run(task.worktree, step, 60_000);
+      if (!r.ok) return `Undo of ${task.id} stopped at \`${step}\`: ${r.output.slice(-300)}`;
+    }
+    this.deps.store.append({ type: 'task.undone', actor, taskId: task.id, commandId: inbound.commandId, payload: { taskId: task.id, runId: cp.runId, head: cp.head, by: inbound.userId } });
+    const t = this.state.tasks.get(task.id)!;
+    if (t.status !== 'ready' && canTransition(t.status, 'ready')) this.setStatus(t, 'ready', `undo by ${inbound.userId}: back to before ${cp.runId}`);
+    void this.tick();
+    return `${task.id} is back to before ${cp.runId} (${cp.head.slice(0, 7)}${cp.stash ? ' plus the uncommitted changes from then' : ''}). The agent is told and continues.`;
+  }
+
+  /** The owner's inline diff comment (dashboard). */
+  addComment(taskId: string, comment: { file: string; line?: number; text: string }, by: string): string {
+    const task = this.state.tasks.get(taskId);
+    if (!task) throw new Error(`No task ${taskId}.`);
+    const commentId = `C-${task.comments.length + 1}`;
+    this.deps.store.append({ type: 'task.comment_added', actor: { kind: 'user', id: by }, taskId, payload: { taskId, commentId, file: comment.file, text: comment.text, by, ...(comment.line !== undefined && { line: comment.line }) } });
+    return commentId;
+  }
+
+  /** "Send to agent": the open comments start a review_fix turn in the author's session. */
+  sendComments(taskId: string, by: string): string {
+    const task = this.state.tasks.get(taskId);
+    if (!task) throw new Error(`No task ${taskId}.`);
+    const open = task.comments.filter((c) => c.sentSeq === undefined);
+    if (!open.length) return `${task.id} has no unsent comments.`;
+    if (!task.sessionRef || !task.agent) return `${task.id} has no agent session to send them to yet.`;
+    if (this.runningFor(task.id)) return `${task.id} has a run in progress; send them when it ends.`;
+    this.deps.store.append({ type: 'task.comments_sent', actor: { kind: 'user', id: by }, taskId, payload: { taskId, commentIds: open.map((c) => c.id), by } });
+    const t = this.state.tasks.get(taskId)!;
+    if (t.status !== 'ready' && canTransition(t.status, 'ready')) this.setStatus(t, 'ready', `${open.length} review comment(s) from ${by}`);
+    void this.tick();
+    return `${open.length} comment(s) sent to ${task.agent}.`;
+  }
+
+  private runTemplate(command: { name?: string; args: string; project?: string; agent?: string }, inbound: Inbound): string {
+    const found = command.project ? this.findProject(command.project) : this.config.projects.length === 1 ? { project: this.config.projects[0]! } : {};
+    const projects = found.project ? [found.project] : this.config.projects;
+    const userDir = join(this.config.configDir, 'commands');
+    if (!command.name) {
+      const lines = projects.flatMap((p) => loadTemplates(p.path, userDir).map((t) => `/run ${t.name}${this.config.projects.length > 1 ? ` #${p.id}` : ''}: ${t.description}`));
+      return [...new Set(lines)].join('\n') || 'No task templates yet. Add .hyde/commands/<name>.md to a project (or ~/.hyde/commands/) with the task text; $ARGUMENTS is replaced.';
+    }
+    if (!found.project) return command.project ? `Unknown project #${command.project}.` : `Which project? Add #<project>.`;
+    const t = loadTemplates(found.project.path, userDir).find((x) => x.name === command.name);
+    if (!t) return `No template ${command.name} in #${found.project.id}. /commands lists them.`;
+    const text = expandTemplate(t, command.args);
+    return this.createTask(inbound, 'task', text, found.project.id, command.agent ?? t.agent, t.level).text;
   }
 
   // ---------------------------------------------------------------- todos and plan then build
@@ -1491,6 +1587,10 @@ export class Orchestrator {
       }
       case 'skills':
         return this.skillsCommand(command, inbound, actor);
+      case 'undo':
+        return this.undo(command.taskId, inbound, actor);
+      case 'template':
+        return this.runTemplate(command, inbound);
       case 'todos': {
         const task = this.state.tasks.get(command.taskId);
         if (!task) return `No task ${command.taskId}.`;

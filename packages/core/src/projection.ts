@@ -39,6 +39,12 @@ export interface TaskView {
   skills?: string[];
   /** Steps taken in the live browser. */
   browserSteps: number;
+  /** The owner's diff comments; `sentSeq` once they went to the agent. */
+  comments: { id: string; file: string; line?: number; text: string; by: string; sentSeq?: number }[];
+  /** Worktree checkpoints before each agent turn. */
+  checkpoints: { runId: string; head: string; stash?: string; seq: number }[];
+  /** The latest undo, if any. */
+  undone?: { runId: string; head: string; seq: number };
   /** The checklist the owner sees live. */
   todos: { text: string; done: boolean }[];
   /** Plan-then-build override; undefined means the default (on for high complexity). */
@@ -251,6 +257,8 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
         leftAgents: [],
         browserSteps: 0,
         todos: [],
+        comments: [],
+        checkpoints: [],
         reviews: [],
         artifactIds: [],
         statusHistory: [],
@@ -297,6 +305,28 @@ export function apply(state: HarnessState, record: HarnessEventRecord): HarnessS
       const { level, by, reason, confident } = record.payload;
       task.complexity = { level, by, reason, confident, seq: record.seq };
       task.complexityHistory.push({ level, by, reason, seq: record.seq });
+      break;
+    }
+    case 'task.comment_added': {
+      const task = state.tasks.get(record.payload.taskId);
+      const p = record.payload;
+      if (task) task.comments.push({ id: p.commentId, file: p.file, text: p.text, by: p.by, ...(p.line !== undefined && { line: p.line }) });
+      break;
+    }
+    case 'task.comments_sent': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) for (const c of task.comments) if (record.payload.commentIds.includes(c.id)) c.sentSeq = record.seq;
+      break;
+    }
+    case 'task.checkpoint': {
+      const task = state.tasks.get(record.payload.taskId);
+      const p = record.payload;
+      if (task) task.checkpoints.push({ runId: p.runId, head: p.head, seq: record.seq, ...(p.stash && { stash: p.stash }) });
+      break;
+    }
+    case 'task.undone': {
+      const task = state.tasks.get(record.payload.taskId);
+      if (task) task.undone = { runId: record.payload.runId, head: record.payload.head, seq: record.seq };
       break;
     }
     case 'task.todos_updated': {

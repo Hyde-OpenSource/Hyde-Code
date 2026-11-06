@@ -12,7 +12,7 @@ export const CLIENTS = ['hyde-ai'] as const;
 export type ClientName = (typeof CLIENTS)[number];
 
 /** Chat commands a client token may run through /api/commands. */
-export const CLIENT_COMMANDS: ReadonlySet<Command['kind']> = new Set(['new', 'answer', 'decide', 'stop', 'retry', 'merge', 'level', 'status', 'agents', 'usage', 'projects', 'logs', 'help']);
+export const CLIENT_COMMANDS: ReadonlySet<Command['kind']> = new Set(['new', 'answer', 'decide', 'stop', 'retry', 'merge', 'level', 'template', 'todos', 'status', 'agents', 'usage', 'projects', 'logs', 'help']);
 
 /** Approvals a client may not decide: approving a promote merges the release branch. */
 export const OWNER_ONLY_APPROVALS: ReadonlySet<ApprovalKind> = new Set(['promote']);

@@ -19,6 +19,8 @@ export type Command =
   | { kind: 'skills'; taskId?: string; add: string[]; remove: string[] }
   | { kind: 'skill'; skillId: string; approved: boolean }
   | { kind: 'todos'; taskId: string }
+  | { kind: 'undo'; taskId: string }
+  | { kind: 'template'; name?: string; args: string; project?: string; agent?: string }
   | { kind: 'plan'; taskId: string; on?: boolean }
   | { kind: 'lesson'; lessonId: string; approved: boolean }
   | { kind: 'help' };

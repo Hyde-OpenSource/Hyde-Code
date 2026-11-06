@@ -60,6 +60,8 @@ export const api = {
     call<{ text: string }>('/api/commands', { method: 'POST', body: JSON.stringify(typeof command === 'string' ? { text: command } : { command }) }),
   taskEvents: (id: string) => call<(FeedEvent & { payload: any })[]>(`/api/tasks/${id}/events`),
   diff: (id: string) => call<string>(`/api/tasks/${id}/diff`),
+  comment: (id: string, body: { file: string; line?: number; text: string }) => call<{ id: string }>(`/api/tasks/${id}/comments`, { method: 'POST', body: JSON.stringify(body) }),
+  sendComments: (id: string) => call<{ text: string }>(`/api/tasks/${id}/comments/send`, { method: 'POST' }),
   files: (id: string) => call<{ files: { path: string; added: number; removed: number }[] }>(`/api/tasks/${id}/files`),
   config: () => call<Record<string, any>>('/api/config'),
   skills: () => call<SkillsInfo>('/api/skills'),

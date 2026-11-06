@@ -324,3 +324,10 @@ main.office-main { height: calc(100vh - var(--topbar-h)); }
 .files td { padding: 2px 4px; overflow-wrap: anywhere; }
 .files td.add { color: var(--cth-status-success); text-align: right; white-space: nowrap; }
 .files td.del { color: var(--cth-status-blocked); text-align: right; white-space: nowrap; }
+.comments { margin-bottom: 8px; }
+.diff-row { position: relative; padding-left: 22px; }
+.diff-comment { position: absolute; left: 0; top: 0; width: 18px; height: 18px; padding: 0; border: 0; background: transparent; color: var(--cth-ink-500); cursor: pointer; opacity: 0; font: inherit; }
+.diff-row:hover .diff-comment, .diff-comment:focus { opacity: 1; }
+@media (hover: none) { .diff-comment { opacity: 0.6; } }
+.diff-form { white-space: normal; margin: 6px 0; display: grid; gap: 6px; }
+.diff-form textarea { width: 100%; font: inherit; }

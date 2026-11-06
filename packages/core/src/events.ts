@@ -240,6 +240,14 @@ export const eventPayloads = {
     decision: z.enum(['allow', 'deny', 'approval']),
     rule: z.string(),
   }),
+  /** The owner's inline comment on the task's diff. */
+  'task.comment_added': z.object({ taskId: z.string(), commentId: z.string(), file: z.string(), line: z.number().int().optional(), text: z.string(), by: z.string() }),
+  /** The owner sent the open comments to the agent (a review_fix turn follows). */
+  'task.comments_sent': z.object({ taskId: z.string(), commentIds: z.array(z.string()), by: z.string() }),
+  /** The worktree state before an agent turn: HEAD plus a stash commit of uncommitted changes. */
+  'task.checkpoint': z.object({ taskId: z.string(), runId: z.string(), head: z.string(), stash: z.string().optional() }),
+  /** The owner undid the last agent turn: the worktree went back to that turn's checkpoint. */
+  'task.undone': z.object({ taskId: z.string(), runId: z.string(), head: z.string(), by: z.string() }),
   /** The task's checklist (agent update_todos, planner seed or owner edit); the latest wins. */
   'task.todos_updated': z.object({
     taskId: z.string(),

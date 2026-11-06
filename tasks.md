@@ -140,11 +140,12 @@
 - **Assigned by / date:** main on 2026-11-05
 - **Repeats:** once
 - **Branch:** agent-hyde-autonomy/feature/smart-routing
-- **Status:** TODO (start after T-006)
+- **Status:** DONE (no step-by-step replay player)
 - **Priority:** medium
 - **Files / area:** apps/hub/**, packages/workspace/**, apps/web
 - **Done when:** docs/roadmap-v2.md section 5 is built and tested: inline diff comments start a review_fix turn, a checkpoint per turn with undo, .hyde/commands templates shared by every intake, session export with secrets redacted.
 - **Notes:**
+  - 2026-11-06: Comments to review_fix, checkpoints and undo, /run templates, redacted export. Tests and screenshots; see progress.md.
 
 ## T-011: Permissions, project memory, agent notes, issue sources
 - **Assigned to:** agent-hyde-autonomy

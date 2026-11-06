@@ -49,6 +49,27 @@ export function parseCommand(text: string): Command | null {
       const id = taskArg();
       return id ? { kind: 'retry', taskId: id } : { kind: 'help' };
     }
+    case 'undo': {
+      const id = taskArg();
+      return id ? { kind: 'undo', taskId: id } : { kind: 'help' };
+    }
+    case 'commands':
+      return { kind: 'template', args: '' };
+    case 'run': {
+      // /run <template> <arguments> #project @agent: a task from .hyde/commands/<template>.md
+      let body = rest;
+      let project: string | undefined;
+      let agent: string | undefined;
+      for (;;) {
+        const tag = /(?:^|\s)([#@])([\w.-]+)\s*$/.exec(body);
+        if (!tag) break;
+        if (tag[1] === '#') project ??= tag[2]!;
+        else agent ??= tag[2]!;
+        body = body.slice(0, tag.index).trim();
+      }
+      const m = /^([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/i.exec(body);
+      return m ? { kind: 'template', name: m[1]!.toLowerCase(), args: (m[2] ?? '').trim(), ...(project && { project }), ...(agent && { agent }) } : { kind: 'help' };
+    }
     case 'todos': {
       const id = taskArg();
       return id ? { kind: 'todos', taskId: id } : { kind: 'help' };
@@ -115,6 +136,8 @@ export const HELP_TEXT = [
   '/answer Q-2 <text>: answer a question (or tap a button, or reply to the question)',
   '/approve A-1, /deny A-1: decide an approval (also L-1 for lessons, S-1 for proposed skills)',
   '/skills: list skills; /skills T-3 +name -name: change the skills a task gets',
+  '/undo T-3: undo the agent\'s last turn (the worktree goes back to before it)',
+  '/commands: your task templates; /run <template> <arguments> #project: start a task from one',
   '/todos T-3: the task checklist; /plan T-3 (show the plan), /plan T-3 on|off (approve the plan before coding)',
   '/merge T-3: merge a finished task into its base branch (staging)',
   '/promote #project: open and merge staging → main (asks you to confirm)',

@@ -64,3 +64,12 @@
 - **Question:** (1) Please ask the owner to run `sudo dnf install webkit2gtk4.1-devel libsoup3-devel librsvg2-devel rpm-build` (checked with `rpm -q`: these four are missing; gtk3-devel is installed). Tauri 2 can't build its window without the first three, and the .rpm in T-014 needs rpm-build. (2) T-013 adds new dependencies: the Rust crates `tauri` and `tauri-build` (2.x), plus `tauri-cli` to build the bundle. I'll pick exact versions at least two weeks old and pin them. May I add them? No other new dependency is planned: the window loads the existing web dashboard and assistant UI from the local hub and desktop servers.
 - **What I already checked:** `rpm -q` for the four packages; no Tauri tooling under ~/.cargo/bin.
 - **Blocking?:** yes for building and running the Tauri window and the .rpm; I'll do the parts that don't need them first.
+
+## Q-006: Secrets in branch names
+- **From:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5)
+- **Date:** 2026-11-06 15:40
+- **Related task:** T-010
+- **Status:** OPEN
+- **Question:** Task branches are named from the task title (`claude-1/feature/t-12-add-login-use-password-hunter2`), so anything secret typed into a request ends up in a git branch name, and on GitHub after the push. Should the hub drop words that look like secrets (or anything after "password", "token", "key") from the branch slug? Or should it name branches by id only (`claude-1/feature/t-12`)?
+- **What I already checked:** `branchName` in packages/workspace; the export now hides the slug when the request had a secret.
+- **Blocking?:** no.
