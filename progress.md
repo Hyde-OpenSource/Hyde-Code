@@ -18,6 +18,15 @@
 
 ## Log
 <!-- New entries go directly below this line, newest first. -->
+### 2026-11-06: Fix hub crash on start with an event log from an older version
+- **Agent:** main (Claude Opus 5.5, claude-opus-5-5)
+- **Branch:** agent-hyde-autonomy/feature/smart-routing
+- **What:** The store now reads every stored event through today's payload schema, so fields added later get their defaults (`assumptions` and `writeScope` on old `task.planned` events were `undefined` and crashed replay with "Cannot read properties of undefined (reading 'length')"). A payload the schema rejects is kept as it was.
+- **Why:** The owner ran `hyde` from HYDE AUTONOMY with their existing ~/.hyde data (written by the October hub) and the hub would not start.
+- **Files:** packages/core/src/store.ts, packages/core/src/core.test.ts
+- **Verified:** New regression test fails without the fix (same TypeError) and passes with it. Replayed a read-only copy of the owner's real ~/.hyde/data/events.db (1342 events, 7 tasks) without errors; copy deleted. `pnpm typecheck` clean, `pnpm test` 233/233.
+- **Open / follow-ups:** The same fix is needed on release/hyde-ai-suite-1 (PR #9) before it is merged.
+
 ### 2026-11-06: Diff comments, checkpoints and undo, task templates, session export (T-010)
 - **Agent:** agent-hyde-autonomy (Claude Opus 5.5, claude-opus-5-5), child session
 - **Branch:** agent-hyde-autonomy/feature/smart-routing

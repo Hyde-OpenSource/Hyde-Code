@@ -50,3 +50,4 @@ Short version of the rules:
 - 2026-11-06: Claim the hub port before any side effect (event store, hooks, chat polling).
 - 2026-11-06: Playwright MCP saves screenshots into the session's working copy; move them out at once and delete `.playwright-mcp` afterwards.
 - 2026-11-06: Pass hints to the desktop command matcher alongside the text; it normalises text, so markers inside it are lost.
+- 2026-11-06: Adding a field with a zod `.default()` to an event payload is not enough: old events in the log never had it. The store reads every event through the current schema; test new hubs against an old ~/.hyde event log.
